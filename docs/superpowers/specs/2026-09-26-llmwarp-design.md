@@ -61,11 +61,15 @@ llmwarp 是一个**纯本地的 OpenAI 协议路由器 + 切换 CLI**。
 ### 2.2 数据面（代理）
 
 - 监听 `127.0.0.1:<port>`（默认 `8787`），仅回环。
-- 接受任意 `/v1/*` 路径（如 `/v1/chat/completions`、`/v1/models`、`/v1/responses`）。
+- 接受任意 `/v1/*` 路径（如 `/v1/chat/completions`、`/v1/responses`）。
+- **baseUrl 语义**：它是客户端 `/v1` 版本前缀的**替代根**，不假定一定以 `/v1` 结尾（也可能是 `https://host/api`）。
+- URL 拼接统一用 `joinUrl(base, suffix)`：去掉 `base` 末尾斜杠、`suffix` 前导斜杠后拼接，避免出现 `//`。
 - 转发规则：
-  - 上游 URL = `provider.baseUrl` + `path` 去掉前导 `/v1`。
+  - 上游 URL = `joinUrl(baseUrl, path 去掉前导 /v1)`。
     - 例：`baseUrl = https://api.deepseek.com/v1`，请求 `/v1/chat/completions` → `https://api.deepseek.com/v1/chat/completions`。
+    - 例：`baseUrl = https://host/api`，请求 `/v1/chat/completions` → `https://host/api/chat/completions`。
     - 请求 `/v1` 或 `/` → 直接 `baseUrl`。
+  - **模型发现 URL** = `joinUrl(baseUrl, "models")`（同样不写死 `/v1/models`）。
   - 保留查询字符串。
   - 复制入站请求头，剔除逐跳头（`host`、`connection`、`keep-alive`、`transfer-encoding`、`content-length`、`authorization`），再注入 `Authorization: Bearer <provider.apiKey>`。
   - **模型改写**：若请求体是 JSON 且含 `model` 字段，则将其改写为当前 `activeModel`。无法解析的请求体原样透传。
@@ -118,14 +122,16 @@ llmwarp 是一个**纯本地的 OpenAI 协议路由器 + 切换 CLI**。
   // 供应商列表，键名即供应商名
   "providers": {
     "deepseek": {
-      // OpenAI 兼容 API 的版本根地址（通常以 /v1 结尾）
+      // OpenAI 兼容 API 的版本根地址。不一定以 /v1 结尾
+      // （如 https://api.deepseek.com/v1、https://host/api）
+      // 模型发现与请求转发都基于它拼接
       "baseUrl": "https://api.deepseek.com/v1",
 
       // 密钥。支持 ${ENV_VAR} 引用环境变量，避免明文落盘
       "apiKey": "${DEEPSEEK_API_KEY}",
 
       // 该供应商可选模型（多个）。可选字段，可省略
-      // 省略/为空时，在 use 时查询 /v1/models 填充
+      // 省略/为空时，在 use 时查询 <baseUrl>/models 填充
       "models": ["deepseek-chat", "deepseek-reasoner"]
     }
   }
@@ -142,7 +148,7 @@ llmwarp 是一个**纯本地的 OpenAI 协议路由器 + 切换 CLI**。
 | `providers` | object | 是 | 供应商映射，键为供应商名 |
 | `providers.<name>.baseUrl` | string | 是 | API 版本根地址 |
 | `providers.<name>.apiKey` | string | 是 | 支持 `${ENV}` 插值 |
-| `providers.<name>.models` | string[] | 否 | 该供应商可选模型（多个）；可为空/省略，为空时在 `use` 时查询 `/v1/models` 填充 |
+| `providers.<name>.models` | string[] | 否 | 该供应商可选模型（多个）；可为空/省略，为空时在 `use` 时查询 `<baseUrl>/models` 填充 |
 
 ### 3.3 校验与错误
 
@@ -168,7 +174,7 @@ llmwarp 是一个**纯本地的 OpenAI 协议路由器 + 切换 CLI**。
   2. 选择模型（方向键；列表来自 `provider.models`）。
   3. 写入 `activeProvider`/`activeModel` 并调用管理端点即时生效。
 - 支持非交互：`llmwarp use <provider> --model <model>`；`llmwarp use <provider> --list` 打印该供应商模型列表。
-- 支持刷新：`llmwarp use <provider> --refresh` 重新查询 `/v1/models` 并更新配置中的 `models`。
+- 支持刷新：`llmwarp use <provider> --refresh` 重新查询 `<baseUrl>/models` 并更新配置中的 `models`。
 
 ---
 
@@ -193,7 +199,7 @@ llmwarp 是一个**纯本地的 OpenAI 协议路由器 + 切换 CLI**。
 1. 名称：根据 baseUrl 主机名自动推断默认值（如 `api.deepseek.com` → `deepseek`），可改。
 2. baseUrl：预设菜单（OpenAI / DeepSeek / OpenRouter / Ollama / 自定义），减少手输。
 3. apiKey：输入；提示可填 `${ENV_VAR}`；输入不回显。
-4. models：自动查询 `/v1/models` 多选；失败则提示手动输入（逗号分隔）。
+4. models：自动查询 `<baseUrl>/models` 多选；失败则提示手动输入（逗号分隔）。
 5. 保存；询问是否立即设为 active。
 
 ### 5.2 `codex` 输出
