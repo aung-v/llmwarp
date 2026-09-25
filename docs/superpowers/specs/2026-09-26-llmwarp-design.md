@@ -17,7 +17,7 @@ llmwarp 是一个**纯本地的 OpenAI 协议路由器 + 切换 CLI**。
 ### 1.1 命名
 
 - 命令：`llmwarp`
-- 配置目录：`~/.llmwarp/`
+- 配置目录：`~/.config/llmwarp/`（遵循 XDG：优先 `$XDG_CONFIG_HOME/llmwarp`，否则 `~/.config/llmwarp`）
 - 选择理由：`llm` + `warp`（跃迁 / 瞬间切换），经 npm/PyPI/GitHub 检索无实质重名，且自解释。
 
 ### 1.2 目标
@@ -79,7 +79,7 @@ llmwarp 是一个**纯本地的 OpenAI 协议路由器 + 切换 CLI**。
 ### 2.3 管理面
 
 - 路径前缀 `/_llmwarp/`，仅回环可访问。
-- 鉴权：请求需带 `x-llmwarp-token: <token>`；token 为守护进程启动时随机生成，写入运行时文件 `~/.llmwarp/daemon.json`，仅当前用户可读。
+- 鉴权：请求需带 `x-llmwarp-token: <token>`；token 为守护进程启动时随机生成，写入运行时文件 `~/.config/llmwarp/daemon.json`，仅当前用户可读。
 - 端点：
   - `GET /_llmwarp/status` → 当前 active、端口、配置路径、启动时间、版本。
   - `POST /_llmwarp/use` → body `{ "provider": "...", "model": "..." }`，更新内存中的 active。
@@ -87,11 +87,11 @@ llmwarp 是一个**纯本地的 OpenAI 协议路由器 + 切换 CLI**。
 
 ### 2.4 状态与持久化
 
-- **配置文件是唯一持久来源**：`~/.llmwarp/config.jsonc`。
+- **配置文件是唯一持久来源**：`~/.config/llmwarp/config.jsonc`。
 - 守护进程启动时读入内存；请求期不读盘。
 - 切换（`use`）后：CLI 写回配置文件的 `activeProvider` / `activeModel`，同时调用管理端点更新运行中的守护进程。
 - 手改配置文件后，运行 `llmwarp reload` 让守护进程重读（`serve --watch` 可选自动监听）。
-- 运行时文件 `~/.llmwarp/daemon.json`：`{ pid, port, token, startedAt }`。
+- 运行时文件 `~/.config/llmwarp/daemon.json`：`{ pid, port, token, startedAt }`。
 
 ### 2.5 生命周期
 
@@ -106,7 +106,7 @@ llmwarp 是一个**纯本地的 OpenAI 协议路由器 + 切换 CLI**。
 
 ### 3.1 文件
 
-`~/.llmwarp/config.jsonc` —— JSON 带 `//` 注释与尾逗号，便于手改。
+`~/.config/llmwarp/config.jsonc` —— JSON 带 `//` 注释与尾逗号，便于手改。
 
 `llmwarp init` 生成如下带注释示例（已存在时不覆盖，`--force` 覆盖）。可直接手改此文件，改完运行 `llmwarp reload`；或用 `llmwarp edit --file` 在 `$EDITOR` 中打开（保存后自动 reload）。文件路径也会显示在 `llmwarp status` 与 `llmwarp list` 输出里。
 
