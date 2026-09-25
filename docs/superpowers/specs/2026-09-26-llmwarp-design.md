@@ -23,8 +23,8 @@ llmwarp 是一个**纯本地的 OpenAI 协议路由器 + 切换 CLI**。
 ### 1.2 目标
 
 - 完全本地：配置与状态都在本机，不依赖任何云服务。
-- Codex 可接入：提供 OpenAI 兼容端点，给出 Codex `config.toml` 片段。
-- 随时切换：`llmwarp use` 交互式选择供应商与模型，即时生效，无需重启 Codex。
+- 任意 OpenAI 兼容客户端可接入：提供 OpenAI 兼容端点与接入信息（Codex 等只是一例，不内置任何客户端专属逻辑）。
+- 随时切换：`llmwarp use` 交互式选择供应商与模型，即时生效，无需重启客户端。
 - 零每请求磁盘 IO：守护进程启动时读配置进内存，请求期不再读盘。
 - 交互友好：全程方向键选择与提示，尽量不要求用户手输。
 
@@ -45,8 +45,8 @@ llmwarp 是一个**纯本地的 OpenAI 协议路由器 + 切换 CLI**。
 
 ```
 ┌────────────┐   OpenAI 协议    ┌──────────────────────────┐   改写 model    ┌──────────────┐
-│  Codex /   │  ───────────────▶ │  llmwarp 守护进程          │ ───────────────▶ │  上游供应商   │
-│  任意客户端 │  ◀─────────────── │  127.0.0.1:8787           │ ◀─────────────── │  (OpenAI 兼容)│
+│  OpenAI 兼容 │  ───────────────▶ │  llmwarp 守护进程          │ ───────────────▶ │  上游供应商   │
+│  客户端      │  ◀─────────────── │  127.0.0.1:8787           │ ◀─────────────── │  (OpenAI 兼容)│
 └────────────┘   SSE 流式回传     │  · 内存持有配置            │   SSE 流式回传     └──────────────┘
                                  │  · 改写请求 model 字段     │
                                  └──────────────────────────┘
@@ -98,7 +98,7 @@ llmwarp 是一个**纯本地的 OpenAI 协议路由器 + 切换 CLI**。
 - `llmwarp serve`：前台运行守护进程。
 - `llmwarp start`：后台启动（detached），写 `daemon.json`。
 - `llmwarp stop`：按 `daemon.json` 的 pid 停止。
-- `llmwarp use` / `llmwarp status`：若守护进程未运行，`use` 会**自动后台启动**后再切换（附提示），保证 Codex 立即可用；`status` 仅报告未运行并给出启动提示。
+- `llmwarp use` / `llmwarp status`：若守护进程未运行，`use` 会**自动后台启动**后再切换（附提示），保证客户端立即可用；`status` 仅报告未运行并给出启动提示。
 
 ---
 
@@ -192,7 +192,6 @@ llmwarp 是一个**纯本地的 OpenAI 协议路由器 + 切换 CLI**。
 | `llmwarp reload` | 让运行中的守护进程重读配置 |
 | `llmwarp serve [--port N] [--watch]` | 前台运行守护进程 |
 | `llmwarp start` / `llmwarp stop` | 后台启停守护进程 |
-| `llmwarp codex` | 打印 / 写入 Codex 接入所需片段 |
 
 ### 5.1 `add` 向导（尽量不手输）
 
@@ -202,21 +201,15 @@ llmwarp 是一个**纯本地的 OpenAI 协议路由器 + 切换 CLI**。
 4. models：自动查询 `<baseUrl>/models` 多选；失败则提示手动输入（逗号分隔）。
 5. 保存；询问是否立即设为 active。
 
-### 5.2 `codex` 输出
+### 5.2 客户端接入（通用）
 
-```
-model = "llmwarp"
-model_provider = "llmwarp"
+llmwarp 是通用 OpenAI 协议路由，不绑定任何特定客户端。任何支持自定义 OpenAI 兼容 base_url 的客户端都可接入：
 
-[model_providers.llmwarp]
-name = "llmwarp"
-base_url = "http://127.0.0.1:8787/v1"
-env_key = "LLMWARP_API_KEY"
-wire_api = "chat"
-```
+- 接入地址：`http://127.0.0.1:<port>/v1`
+- API key：任意值（llmwarp 忽略客户端密钥，使用供应商自己的 key）
+- 模型名：任意占位名，真实模型由 llmwarp 按 active 改写
 
-- `env_key` 指向的环境变量仅需存在（值任意）即可，因为 llmwarp 忽略客户端密钥。
-- 说明：`model` 填任意占位名即可，真实模型由 llmwarp 按 active 改写；`wire_api = "chat"` 对应 `/v1/chat/completions`。
+`llmwarp status` 会打印当前接入地址。Codex、Cursor、Continue、各类 SDK 等只是接入方举例，接入方式由各自文档决定，llmwarp 不内置任何客户端专属命令。
 
 ---
 
@@ -225,7 +218,7 @@ wire_api = "chat"
 - 数据面与管理面均**仅绑定回环地址** `127.0.0.1`。
 - 管理端点需 `x-llmwarp-token`，token 随机生成、权限 `0600` 存储。
 - 上游密钥从配置读取，支持 `${ENV}` 避免明文；日志与错误信息**不打印密钥**。
-- 数据面默认信任本机客户端（简化 Codex 接入）；若需更强隔离，后续可加可选的 `requireClientKey`（当前非目标）。
+- 数据面默认信任本机客户端（简化客户端接入）；若需更强隔离，后续可加可选的 `requireClientKey`（当前非目标）。
 
 ---
 
@@ -254,7 +247,7 @@ src/
   daemon.ts           # start/stop/pid/token、自动启动
   ui.ts               # 交互式提示封装
   commands/
-    init.ts add.ts list.ts use.ts status.ts remove.ts reload.ts serve.ts codex.ts
+    init.ts add.ts list.ts use.ts status.ts remove.ts reload.ts serve.ts
 test/
   config.test.ts proxy.test.ts cli.test.ts
 docs/superpowers/specs/2026-09-26-llmwarp-design.md
@@ -286,7 +279,7 @@ docs/superpowers/specs/2026-09-26-llmwarp-design.md
   - 起一个假上游 `http` 服务，进程内起 llmwarp，断言：`Authorization` 被替换为供应商密钥、`model` 被改写、SSE 分块按序透传、上游不可达返回 502。
   - 管理端点：`use` 改变后续请求的改写目标；`reload` 读取新配置；无 token 返回 401。
 - **CLI**
-  - 非交互路径（`use <provider> --model M`、`list`、`codex`）通过子进程断言输出与配置变更。
+  - 非交互路径（`use <provider> --model M`、`list`）通过子进程断言输出与配置变更。
 
 ---
 
