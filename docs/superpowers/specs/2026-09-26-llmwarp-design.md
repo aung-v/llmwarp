@@ -108,7 +108,7 @@ llmwarp 是一个**纯本地的 OpenAI 协议路由器 + 切换 CLI**。
 
 `~/.llmwarp/config.jsonc` —— JSON 带 `//` 注释与尾逗号，便于手改。
 
-`llmwarp init` 生成如下带注释示例（已存在时不覆盖，`--force` 覆盖）：
+`llmwarp init` 生成如下带注释示例（已存在时不覆盖，`--force` 覆盖）。可直接手改此文件，改完运行 `llmwarp reload`；或用 `llmwarp edit --file` 在 `$EDITOR` 中打开（保存后自动 reload）。文件路径也会显示在 `llmwarp status` 与 `llmwarp list` 输出里。
 
 ```jsonc
 {
@@ -185,6 +185,7 @@ llmwarp 是一个**纯本地的 OpenAI 协议路由器 + 切换 CLI**。
 | `llmwarp`（无参数） | 打开交互式 TUI 菜单：添加 / 切换 / 列表 / 状态 / 退出；首次运行引导 `init` |
 | `llmwarp init [--force]` | 生成带注释的示例配置 |
 | `llmwarp add` | 向导式新增供应商 |
+| `llmwarp edit [provider]` | 编辑供应商（baseUrl/apiKey/models）；`--file` 用 $EDITOR 打开配置文件 |
 | `llmwarp list` | 表格列出供应商：名称、baseUrl、模型数、是否 active |
 | `llmwarp use [provider] [--model M] [--list] [--refresh]` | 切换供应商/模型；无参时交互选择 |
 | `llmwarp status` | 当前 active、守护进程状态、端口、配置路径；可选探测上游可达性 |
