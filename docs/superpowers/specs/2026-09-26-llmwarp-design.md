@@ -124,7 +124,8 @@ llmwarp 是一个**纯本地的 OpenAI 协议路由器 + 切换 CLI**。
       // 密钥。支持 ${ENV_VAR} 引用环境变量，避免明文落盘
       "apiKey": "${DEEPSEEK_API_KEY}",
 
-      // 该供应商下可选的模型（多个）。可手写，可由 add/use 时查询 /v1/models 自动填充
+      // 该供应商可选模型（多个）。可选字段，可省略
+      // 省略/为空时，在 use 时查询 /v1/models 填充
       "models": ["deepseek-chat", "deepseek-reasoner"]
     }
   }
@@ -137,7 +138,7 @@ llmwarp 是一个**纯本地的 OpenAI 协议路由器 + 切换 CLI**。
 |------|------|------|------|
 | `port` | number | 否 | 默认 `8787` |
 | `activeProvider` | string | 否 | 当前供应商名；空则取 `providers` 第一个 |
-| `activeModel` | string | 否 | 当前模型；空则取该供应商 `models` 第一个 |
+| `activeModel` | string | 否 | 当前模型；空则取该供应商 `models` 第一个；若 `models` 也为空则触发 `use` 时发现 |
 | `providers` | object | 是 | 供应商映射，键为供应商名 |
 | `providers.<name>.baseUrl` | string | 是 | API 版本根地址 |
 | `providers.<name>.apiKey` | string | 是 | 支持 `${ENV}` 插值 |
@@ -146,7 +147,8 @@ llmwarp 是一个**纯本地的 OpenAI 协议路由器 + 切换 CLI**。
 ### 3.3 校验与错误
 
 - 加载时校验：`providers` 非空；每个供应商 `baseUrl`/`apiKey` 存在；`models` 若存在则须为字符串数组（允许为空）。
-- `activeProvider` 不存在于 `providers`、或 `activeModel` 不在该供应商 `models` 中 → 报明确错误，提示修正或运行 `llmwarp use`。
+- `activeProvider` 不存在于 `providers` → 报明确错误，提示修正或运行 `llmwarp use`。
+- `activeModel` 不在该供应商 `models` 中**且 `models` 非空** → 报错，提示运行 `llmwarp use`；`models` 省略或为空时不做成员校验。
 - `${ENV}` 未定义 → 报错并指出缺失的环境变量名（不打印密钥值）。
 - 使用 `jsonc-parser` 的**范围编辑**能力写回，尽量保留用户手写注释与格式。
 
@@ -287,7 +289,7 @@ docs/superpowers/specs/2026-09-26-llmwarp-design.md
 1. 语言：Node.js + TypeScript。
 2. 切换架构：常驻守护进程 + 本地管理端点（内存状态，零每请求 IO）。
 3. 上游：仅 OpenAI 兼容，透明转发。
-4. 模型：供应商持有 `models` 列表（多个）；`activeProvider`/`activeModel` 指定当前选择；转发时改写请求 `model`。
+4. 模型：供应商可持有 `models` 列表（多个，**可选**，省略则切换时查询发现）；`activeProvider`/`activeModel` 指定当前选择；转发时改写请求 `model`。
 5. 交互：全程向导与方向键，减少手输。
 6. 无 Web UI，无自定义请求头。
 7. 配置为 JSONC，支持注释与直接手改，`reload` 生效。
