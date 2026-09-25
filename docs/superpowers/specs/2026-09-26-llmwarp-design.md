@@ -99,6 +99,7 @@ llmwarp 是一个**纯本地的 OpenAI 协议路由器 + 切换 CLI**。
 - `llmwarp start`：后台启动（detached），写 `daemon.json`。
 - `llmwarp stop`：按 `daemon.json` 的 pid 停止。
 - `llmwarp use` / `llmwarp status`：若守护进程未运行，`use` 会**自动后台启动**后再切换（附提示），保证客户端立即可用；`status` 仅报告未运行并给出启动提示。
+- **启动即打印接入提示**：`serve` / `start`（以及 `use` 自动启动后）会打印接入地址、客户端 key/model 填法、当前使用的供应商/模型，用户无需查文档就知道本地 URL 写什么。`use` 切换成功后也会回显接入地址。
 
 ---
 
@@ -212,7 +213,7 @@ llmwarp 是通用 OpenAI 协议路由，不绑定任何特定客户端。任何�
 - API key：任意值（llmwarp 忽略客户端密钥，使用供应商自己的 key）
 - 模型名：任意占位名，真实模型由 llmwarp 按 active 改写
 
-`llmwarp status` 会打印当前接入地址。Codex、Cursor、Continue、各类 SDK 等只是接入方举例，接入方式由各自文档决定，llmwarp 不内置任何客户端专属命令。
+`llmwarp status`、守护进程启动、以及 `use` 切换成功后都会打印当前接入地址。Codex、Cursor、Continue、各类 SDK 等只是接入方举例，接入方式由各自文档决定，llmwarp 不内置任何客户端专属命令。
 
 ---
 
