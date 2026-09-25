@@ -153,9 +153,10 @@ llmwarp 是一个**纯本地的 OpenAI 协议路由器 + 切换 CLI**。
 
 ### 3.3 校验与错误
 
-- 加载时校验：`providers` 非空；每个供应商 `baseUrl`/`apiKey` 存在；`models` 若存在则须为字符串数组（允许为空）。
-- `activeProvider` 不存在于 `providers` → 报明确错误，提示修正或运行 `llmwarp use`。
-- `activeModel` 不在该供应商 `models` 中**且 `models` 非空** → 报错，提示运行 `llmwarp use`；`models` 省略或为空时不做成员校验。
+- 加载时校验（**致命**）：`providers` 非空；每个供应商 `baseUrl`/`apiKey` 存在；`models` 若存在则须为字符串数组（允许为空）。
+- active 相关问题（`activeProvider` 不存在、`activeModel` 不在 `models` 里）**不再致命**，只作警告并在运行时安全回退/照旧转发。原因：否则会连修复用的 `llmwarp use` 都被挡住，用户被锁死。
+  - `activeProvider` 不存在 → 回退到第一个供应商。
+  - `activeModel` 不在 `models` 里 → 仍按它转发，仅提示；`llmwarp status` 会显示警告。
 - `${ENV}` 未定义 → 报错并指出缺失的环境变量名（不打印密钥值）。
 - 使用 `jsonc-parser` 的**范围编辑**能力写回，尽量保留用户手写注释与格式。
 
