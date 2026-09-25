@@ -201,7 +201,7 @@ llmwarp 是一个**纯本地的 OpenAI 协议路由器 + 切换 CLI**。
 
 1. 名称：根据 baseUrl 主机名自动推断默认值（如 `api.deepseek.com` → `deepseek`），可改。
 2. baseUrl：预设菜单（OpenAI / DeepSeek / OpenRouter / Ollama / 自定义），每项带说明；自定义时提示格式与示例。
-3. apiKey：输入；提示到服务商控制台创建、可填 `${ENV_VAR}`；输入不回显。
+3. apiKey：输入；提示到服务商控制台创建、可填 `${ENV_VAR}`；输入以 `*` 逐字回显（有可见反馈，但不显示明文）；编辑时不回显当前 key。
 4. models：自动查询 `<baseUrl>/models` 多选；失败则提示手动输入（逗号分隔，给出示例）。
 5. 保存；询问是否立即设为 active。`edit` 向导同样带字段说明。
 
