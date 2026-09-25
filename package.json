@@ -1,0 +1,31 @@
+{
+  "name": "llmwarp",
+  "version": "1.0.0",
+  "description": "Local OpenAI-protocol router CLI for switching LLM API providers",
+  "type": "module",
+  "bin": {
+    "llmwarp": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsx src/cli.ts",
+    "test": "node --test --import tsx test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@inquirer/core": "^10.3.2",
+    "@inquirer/prompts": "^7.2.0",
+    "commander": "^12.1.0",
+    "jsonc-parser": "^3.3.1",
+    "picocolors": "^1.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
