@@ -183,7 +183,7 @@ llmwarp 是一个**纯本地的 OpenAI 协议路由器 + 切换 CLI**。
 
 | 命令 | 说明 |
 |------|------|
-| `llmwarp`（无参数） | 打开交互式 TUI 菜单：添加 / 切换 / 列表 / 状态 / 退出；首次运行引导 `init` |
+| `llmwarp`（无参数） | 打开交互式菜单：切换 / 添加 / 编辑 / 列表 / 状态 / 启动 / 停止 / 移除 / 退出；首次运行引导 `init` |
 | `llmwarp init [--force]` | 生成带注释的示例配置 |
 | `llmwarp add` | 向导式新增供应商 |
 | `llmwarp edit [provider]` | 编辑供应商（baseUrl/apiKey/models）；`--file` 用 $EDITOR 打开配置文件 |
@@ -269,6 +269,7 @@ docs/superpowers/specs/2026-09-26-llmwarp-design.md
 | `${ENV}` 未定义 | 报错并指出变量名 |
 | 无 active 或 active 无效 | 请求返回 `503` 并提示运行 `llmwarp use` |
 | 管理端点 token 错误 | `401` |
+| 启动时端口被占用 | 立即报出端口号，并给出可执行方案：查占用者（`ss`/`lsof`）、结束该进程、或改配置里的 `port`；不空等超时 |
 
 ---
 
