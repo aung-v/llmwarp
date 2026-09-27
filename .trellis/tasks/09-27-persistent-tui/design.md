@@ -12,7 +12,7 @@ llmwarp daemon
 llmwarp tui
 ├── GET  /_llmwarp/status   ← 定时只读刷新
 ├── POST /_llmwarp/use      ← 仅在用户确认切换后调用
-└── 本地读取 daemon.log     ← 只读日志尾部
+└── 本地读取 config.jsonc   ← 构建可切换列表
 ```
 
 ## 技术选型
@@ -22,7 +22,7 @@ llmwarp tui
 理由：
 
 - 当前项目依赖很少，现有 TUI 交互也不依赖大型 TUI 框架。
-- 第一版界面只需要状态区、列表区、日志区和确认提示，复杂度可控。
+- 第一版界面只需要状态区、列表区、操作说明区和确认提示，复杂度可控。
 - 避免新增 React/blessed 带来的包体积、维护和构建复杂度。
 - 后续如果界面复杂到需要组件化，再迁移到 Ink 也不影响 daemon API。
 
@@ -77,12 +77,10 @@ src/tui/
 6. 成功后立即刷新状态。
 7. 失败只显示错误，不自动重试。
 
-### 日志读取
+### 日志（已按用户反馈移除）
 
-1. 每次界面重绘或用户按 `r` 时读取 daemon 日志尾部。
-2. 只保留最后 200 行。
-3. 读取失败时显示“日志不可用”，不影响状态展示。
-4. 不写入、截断或旋转日志。
+- TUI 不读取或展示 daemon 日志。
+- 排查问题使用外部命令或 CLI。
 
 ## 界面布局
 
@@ -120,7 +118,6 @@ interface TuiState {
   confirming: boolean;
   status: StatusSnapshot | null;
   providers: ProviderCatalogItem[];
-  logs: string[];
   message: string | null;
   switching: boolean;
 }
@@ -133,13 +130,13 @@ interface TuiState {
 - `selectPrevious(state)`
 - `beginConfirm(state)`
 - `cancelConfirm(state)`
-- `appendMessage(state, message)`
+- `finishSwitch(state, message)`
 
 ## 终端安全
 
 - 只有 stdin 是 TTY 时才启用 raw mode。
 - 退出、异常、SIGINT 都要恢复终端状态。
-- 输出前对来自配置和日志的文本转义 ANSI 控制序列，避免日志内容破坏界面。
+- 输出前对来自配置和 daemon 状态的文本转义 ANSI 控制序列，避免内容破坏界面。
 - token 和 API key 不进入 TUI state。
 
 ## 与 daemon 的关系
@@ -148,7 +145,7 @@ interface TuiState {
 - TUI 不 spawn、kill 或 restart daemon。
 - TUI 不调用 reload。
 - 定时器只做只读请求。
-- 如果 daemon 未运行，显示离线和 `llmwarp start` 提示。
+- 如果 daemon 未运行，显示离线和 `llmwarp start` 提示，但不自动启动。
 
 ## 兼容性
 
@@ -167,6 +164,5 @@ interface TuiState {
 - 确认态进入和取消。
 - 当前 active 不在列表时的提示。
 - 渲染输出包含必要状态字段。
-- 日志尾部的截断。
 
 不mock 大量终端行为；集成层面通过手动验收确认交互。

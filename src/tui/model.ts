@@ -13,6 +13,7 @@ export interface CatalogItem {
   model: string | null;
   label: string;
   selectable: boolean;
+  legacy?: boolean;
 }
 
 export interface TuiState {
@@ -60,6 +61,7 @@ export function buildCatalog(config: Config, status?: StatusSnapshot | null): Ca
       model: active.model,
       label: `${active.provider} / ${active.model}`,
       selectable: true,
+      legacy: true,
     });
   }
 

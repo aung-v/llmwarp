@@ -55,6 +55,7 @@ test("buildCatalog 保留配置中缺少的 active 模型", () => {
     "ark / old-model",
     "ark / glm-5.3-flash",
   ]);
+  assert.equal(entries.at(-1)?.legacy, true);
 });
 
 test("TUI 选择有边界且确认可以取消", () => {
@@ -111,6 +112,29 @@ test("渲染不展示日志面板并说明刷新操作", () => {
   assert.doesNotMatch(output, /日志/);
   assert.match(output, /操作说明/);
   assert.match(output, /r 立即重新读取 daemon 状态和配置/);
+});
+
+test("离线时显示启动命令且不自动启动 daemon", () => {
+  const state = createTuiState(buildCatalog(config), null);
+  const output = renderTui(state, { height: 24, width: 80 });
+
+  assert.match(output, /离线/);
+  assert.match(output, /请手动运行 llmwarp start/);
+});
+
+test("渲染标记来自旧配置的 active 模型", () => {
+  const entries = buildCatalog(
+    {
+      ...config,
+      providers: {
+        ark: { baseUrl: "https://ark.test/v1", apiKey: "secret-key", models: ["old-model"] },
+      },
+    },
+    status,
+  );
+  const output = renderTui(createTuiState(entries, status), { height: 24, width: 80 });
+
+  assert.match(output, /旧配置\/手动输入/);
 });
 
 test("确认态显示目标和取消方式", () => {

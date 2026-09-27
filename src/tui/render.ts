@@ -105,16 +105,17 @@ function modelRows(state: TuiState, height: number): string[] {
     const activeMark = isActive ? "  ● 当前激活" : "";
     const text = `${marker} ${sanitize(entry.label)}${activeMark}${entry.selectable ? "" : "  不可选"}`;
     if (selected) {
-      rows.push(isActive ? pc.inverse(pc.yellow(text)) : pc.bgCyan(pc.black(text)));
+      rows.push(isActive ? pc.bgGreen(pc.black(text)) : pc.bgCyan(pc.black(text)));
     } else if (isActive) {
-      rows.push(pc.yellow(text));
+      rows.push(pc.bold(pc.green(text)));
     } else {
       rows.push(entry.selectable ? text : pc.dim(text));
     }
+    if (entry.legacy) rows.push(pc.dim("    └ 旧配置/手动输入"));
   }
 
   rows.push("");
-  rows.push(pc.dim("黄色 = 当前激活，蓝底/反白 = 键盘选中"));
+  rows.push(pc.dim("绿色 = 当前激活，蓝底 = 键盘选中"));
   return rows;
 }
 
@@ -130,7 +131,7 @@ function daemonRows(state: TuiState): string[] {
       "启动时间  —",
       "配置文件  —",
       "",
-      pc.dim("daemon 未运行；TUI 不会自动启动它"),
+      pc.dim("请手动运行 llmwarp start；TUI 不会自动启动它"),
     ];
   }
 
@@ -187,7 +188,7 @@ export function renderTui(
   const activeLabel = active?.model ? `${sanitize(active.provider)} / ${sanitize(active.model)}` : "—";
   const header = [
     `${pc.bgCyan(pc.black(" ⚡ llmwarp TUI "))} ${statusBadge(running)} ${pc.dim("显式切换，不影响代理服务")}`,
-    `${pc.bold("当前激活")}  ${running && active ? pc.yellow(activeLabel) : "—"}`,
+    `${pc.bold("当前激活")}  ${running && active ? pc.green(activeLabel) : "—"}`,
   ];
 
   const notice = confirmationRows(state);
