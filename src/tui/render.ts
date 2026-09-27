@@ -105,16 +105,16 @@ function modelRows(state: TuiState, height: number): string[] {
     const activeMark = isActive ? "  ● 当前激活" : "";
     const text = `${marker} ${sanitize(entry.label)}${activeMark}${entry.selectable ? "" : "  不可选"}`;
     if (selected) {
-      rows.push(pc.bgCyan(pc.black(text)));
+      rows.push(isActive ? pc.inverse(pc.yellow(text)) : pc.bgCyan(pc.black(text)));
     } else if (isActive) {
-      rows.push(pc.green(text));
+      rows.push(pc.yellow(text));
     } else {
       rows.push(entry.selectable ? text : pc.dim(text));
     }
   }
 
   rows.push("");
-  rows.push(pc.dim("绿色 = 当前激活，蓝底 = 键盘选中"));
+  rows.push(pc.dim("黄色 = 当前激活，蓝底/反白 = 键盘选中"));
   return rows;
 }
 
@@ -187,7 +187,7 @@ export function renderTui(
   const activeLabel = active?.model ? `${sanitize(active.provider)} / ${sanitize(active.model)}` : "—";
   const header = [
     `${pc.bgCyan(pc.black(" ⚡ llmwarp TUI "))} ${statusBadge(running)} ${pc.dim("显式切换，不影响代理服务")}`,
-    `${pc.bold("当前激活")}  ${running && active ? pc.green(activeLabel) : "—"}`,
+    `${pc.bold("当前激活")}  ${running && active ? pc.yellow(activeLabel) : "—"}`,
   ];
 
   const notice = confirmationRows(state);
