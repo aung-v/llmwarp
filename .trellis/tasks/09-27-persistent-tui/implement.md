@@ -24,6 +24,11 @@
    - 在确认后调用 `POST /_llmwarp/use`。
    - 确保 SIGINT、异常和退出时恢复终端。
 
+5. 新增 `src/metrics.ts`
+   - 在 daemon 内存中记录最近 `/v1` 请求。
+   - 通过 `GET /_llmwarp/status` 暴露 60 秒速率和最近请求。
+   - 不记录请求体、响应体或任何 key。
+
 5. 注册 CLI 命令
    - 在 `src/cli.ts` 添加 `llmwarp tui`。
 

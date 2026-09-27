@@ -6,6 +6,28 @@ export interface StatusSnapshot {
   configPath: string;
   startedAt: string;
   version: string;
+  metrics: RequestMetricsSnapshot | null;
+}
+
+export interface RequestActivity {
+  timestamp: string;
+  method: string;
+  path: string;
+  provider: string | null;
+  model: string | null;
+  status: number | null;
+  durationMs: number;
+  ok: boolean;
+}
+
+export interface RequestMetricsSnapshot {
+  totalRequests: number;
+  totalErrors: number;
+  requestsLastMinute: number;
+  errorsLastMinute: number;
+  requestsPerMinute: number;
+  averageDurationMs: number;
+  recent: RequestActivity[];
 }
 
 export interface CatalogItem {
@@ -144,5 +166,51 @@ export function parseStatusSnapshot(payload: unknown): StatusSnapshot | null {
     configPath: value.configPath,
     startedAt: typeof value.startedAt === "string" ? value.startedAt : "",
     version: typeof value.version === "string" ? value.version : "unknown",
+    metrics: parseMetricsSnapshot(value.metrics),
+  };
+}
+
+function parseMetricsSnapshot(payload: unknown): RequestMetricsSnapshot | null {
+  if (!payload || typeof payload !== "object") return null;
+  const value = payload as Record<string, unknown>;
+  const numbers = ["totalRequests", "totalErrors", "requestsLastMinute", "errorsLastMinute", "requestsPerMinute", "averageDurationMs"] as const;
+  if (!numbers.every((key) => typeof value[key] === "number") || !Array.isArray(value.recent)) return null;
+  const [totalRequests, totalErrors, requestsLastMinute, errorsLastMinute, requestsPerMinute, averageDurationMs] = numbers.map(
+    (key) => value[key],
+  ) as [number, number, number, number, number, number];
+
+  const recent = value.recent.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const request = item as Record<string, unknown>;
+    if (
+      typeof request.timestamp !== "string" ||
+      typeof request.method !== "string" ||
+      typeof request.path !== "string" ||
+      typeof request.durationMs !== "number" ||
+      typeof request.ok !== "boolean"
+    ) {
+      return [];
+    }
+
+    return [{
+      timestamp: request.timestamp,
+      method: request.method,
+      path: request.path,
+      provider: typeof request.provider === "string" ? request.provider : null,
+      model: typeof request.model === "string" ? request.model : null,
+      status: typeof request.status === "number" ? request.status : null,
+      durationMs: request.durationMs,
+      ok: request.ok,
+    }];
+  });
+
+  return {
+    totalRequests,
+    totalErrors,
+    requestsLastMinute,
+    errorsLastMinute,
+    requestsPerMinute,
+    averageDurationMs,
+    recent,
   };
 }

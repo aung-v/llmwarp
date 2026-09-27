@@ -11,6 +11,7 @@ import {
   type Config,
 } from "./config.js";
 import { buildUpstreamUrl, proxyRequest } from "./proxy.js";
+import { RequestMetrics } from "./metrics.js";
 import { accessLines } from "./endpoint.js";
 import { portInUseMessage, findPortOwner } from "./net.js";
 
@@ -19,6 +20,8 @@ const ADMIN_PREFIX = "/_llmwarp/";
 
 class RouterState {
   constructor(public config: Config) {}
+
+  readonly metrics = new RequestMetrics();
 
   reload(): void {
     this.config = loadConfig();
@@ -79,6 +82,7 @@ async function handleAdmin(
       configPath: CONFIG_PATH,
       startedAt,
       version: VERSION,
+      metrics: router.metrics.snapshot(),
     });
     return;
   }
@@ -114,6 +118,29 @@ async function handleProxy(
   res: http.ServerResponse,
   router: RouterState,
 ): Promise<void> {
+  const startedAt = Date.now();
+  let providerName: string | null = null;
+  let model: string | null = null;
+  let completed = false;
+  const url = new URL(req.url ?? "/", "http://localhost");
+  const record = (status: number | null): void => {
+    if (completed) return;
+    completed = true;
+    router.metrics.record({
+      method: req.method ?? "GET",
+      path: url.pathname,
+      provider: providerName,
+      model,
+      status,
+      durationMs: Date.now() - startedAt,
+    });
+  };
+
+  res.once("finish", () => record(res.statusCode));
+  res.once("close", () => {
+    if (!res.writableFinished) record(null);
+  });
+
   let active: ReturnType<RouterState["active"]>;
   try {
     active = router.active();
@@ -132,8 +159,9 @@ async function handleProxy(
     return;
   }
 
-  const url = new URL(req.url ?? "/", "http://localhost");
   const upstreamUrl = buildUpstreamUrl(active.provider.baseUrl, url.pathname, url.search);
+  providerName = active.providerName;
+  model = active.model ?? null;
   await proxyRequest(req, res, { upstreamUrl, apiKey, model: active.model });
 }
 

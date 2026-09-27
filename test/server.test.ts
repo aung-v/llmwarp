@@ -94,7 +94,27 @@ test("代理：改写 model、注入密钥、透传 SSE、管理端点鉴权", a
     headers: { "x-llmwarp-token": handle.token },
   });
   assert.equal(authorized.status, 200);
-  const status = (await authorized.json()) as { active: { provider: string; model: string } };
+  const status = (await authorized.json()) as {
+    active: { provider: string; model: string };
+    metrics: {
+      totalRequests: number;
+      totalErrors: number;
+      recent: {
+        method: string;
+        path: string;
+        provider: string | null;
+        model: string | null;
+        status: number | null;
+      }[];
+    };
+  };
   assert.equal(status.active.provider, "fake");
   assert.equal(status.active.model, "real-model");
+  assert.equal(status.metrics.totalRequests, 2);
+  assert.equal(status.metrics.totalErrors, 0);
+  assert.equal(status.metrics.recent[0]?.method, "POST");
+  assert.equal(status.metrics.recent[0]?.path, "/v1/stream");
+  assert.equal(status.metrics.recent[0]?.provider, "fake");
+  assert.equal(status.metrics.recent[0]?.model, "real-model");
+  assert.equal(status.metrics.recent[0]?.status, 200);
 });

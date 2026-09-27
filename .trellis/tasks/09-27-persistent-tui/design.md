@@ -7,10 +7,11 @@
 ```text
 llmwarp daemon
 ├── /v1/*           ← 继续服务 OpenAI 兼容客户端
-└── /_llmwarp/*     ← 本地管理 API
+│   └── 内存指标    ← 最近请求与 60 秒速率
+└── /_llmwarp/*     ← 本地管理 API，status 包含请求指标
 
 llmwarp tui
-├── GET  /_llmwarp/status   ← 定时只读刷新
+├── GET  /_llmwarp/status   ← 定时只读刷新，包含请求指标
 ├── POST /_llmwarp/use      ← 仅在用户确认切换后调用
 └── 本地读取 config.jsonc   ← 构建可切换列表
 ```
@@ -22,7 +23,7 @@ llmwarp tui
 理由：
 
 - 当前项目依赖很少，现有 TUI 交互也不依赖大型 TUI 框架。
-- 第一版界面只需要状态区、列表区、操作说明区和确认提示，复杂度可控。
+- 第一版界面只需要状态区、列表区、操作说明区、请求活动面板和确认提示，复杂度可控。
 - 避免新增 React/blessed 带来的包体积、维护和构建复杂度。
 - 后续如果界面复杂到需要组件化，再迁移到 Ink 也不影响 daemon API。
 
@@ -43,6 +44,8 @@ src/tui/
 ├── model.ts       # 纯状态模型、列表构建、选择和确认逻辑
 ├── render.ts      # 纯渲染函数，把 state 转成终端输出
 └── index.ts       # keypress、定时刷新、daemon 调用和进程生命周期
+
+src/metrics.ts     # daemon 内存请求指标
 ```
 
 同时修改：
@@ -65,7 +68,8 @@ src/tui/
 2. 如果 daemon 存在，调用 `adminRequest("GET", "status")`。
 3. 读取 `loadConfig()` 获取供应商和模型列表。
 4. 每 3 秒重复状态刷新。
-5. 配置不自动 reload；只有用户按 `r` 时重新读取本地配置并刷新状态。
+5. `status` 返回最近请求和 60 秒速率。
+6. 配置不自动 reload；只有用户按 `r` 时重新读取本地配置并刷新状态。
 
 ### 切换流程
 
@@ -81,6 +85,13 @@ src/tui/
 
 - TUI 不读取或展示 daemon 日志。
 - 排查问题使用外部命令或 CLI。
+
+### 请求指标
+
+1. `src/metrics.ts` 在 daemon 内存中保存最近请求和 60 秒事件窗口。
+2. `/v1` 请求在响应 `finish` 或异常 `close` 时记录。
+3. 只记录方法、路径、目标供应商/模型、状态码、耗时和成功/失败。
+4. 不记录请求体、响应体或任何 key。
 
 ## 界面布局
 

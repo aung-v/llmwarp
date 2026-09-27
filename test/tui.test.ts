@@ -19,6 +19,7 @@ const status: StatusSnapshot = {
   configPath: "/tmp/llmwarp/config.jsonc",
   startedAt: "2026-09-27T00:00:00.000Z",
   version: "1.0.0",
+  metrics: null,
 };
 
 const config: Config = {
@@ -105,13 +106,45 @@ test("渲染包含状态且不泄露密钥", () => {
   assert.doesNotMatch(output, /secret-key/);
 });
 
-test("渲染不展示日志面板并说明刷新操作", () => {
+test("渲染请求活动面板和手动刷新提示", () => {
   const state = createTuiState(buildCatalog(config), status);
   const output = renderTui(state, { height: 24, width: 80 });
 
   assert.doesNotMatch(output, /日志/);
-  assert.match(output, /操作说明/);
-  assert.match(output, /r 立即重新读取 daemon 状态和配置/);
+  assert.match(output, /请求活动/);
+  assert.match(output, /r 手动刷新/);
+});
+
+test("渲染请求活动统计和最近请求", () => {
+  const state = createTuiState(buildCatalog(config), {
+    ...status,
+    metrics: {
+      totalRequests: 2,
+      totalErrors: 0,
+      requestsLastMinute: 2,
+      errorsLastMinute: 0,
+      requestsPerMinute: 2,
+      averageDurationMs: 120,
+      recent: [{
+        timestamp: "2026-09-27T12:34:56.000Z",
+        method: "POST",
+        path: "/v1/chat/completions",
+        provider: "ark",
+        model: "glm-5.3-flash",
+        status: 200,
+        durationMs: 120,
+        ok: true,
+      }],
+    },
+  });
+  const output = renderTui(state, { height: 24, width: 80 });
+
+  assert.match(output, /请求活动/);
+  assert.match(output, /60秒 2 · 错误 0/);
+  assert.match(output, /RPM 2 · 平均 120ms/);
+  assert.match(output, /POST \/v1\/chat\/completions/);
+  assert.match(output, /200 120ms ark\/glm-5\.3-flash/);
+  assert.doesNotMatch(output, /secret-key/);
 });
 
 test("离线时显示启动命令且不自动启动 daemon", () => {

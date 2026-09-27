@@ -160,15 +160,35 @@ function daemonRows(state: TuiState): string[] {
   ];
 }
 
-function helpRows(): string[] {
-  return [
-    "↑↓ 选择模型",
-    "Enter 进入切换确认",
-    "y 确认切换",
-    "n / Esc 取消确认",
-    "r 立即重新读取 daemon 状态和配置",
-    "q 退出（不影响 daemon）",
+function shortTime(timestamp: string): string {
+  const date = new Date(timestamp);
+  return Number.isNaN(date.getTime())
+    ? "--:--"
+    : `${date.getHours().toString().padStart(2, "0")}:${date.getMinutes().toString().padStart(2, "0")}`;
+}
+
+function requestRows(state: TuiState, height: number): string[] {
+  const metrics = state.status?.metrics;
+  if (!metrics) {
+    return ["暂无请求指标", pc.dim("重启 daemon 后启用"), "", pc.dim("只显示 /v1 请求，不含请求体")];
+  }
+
+  const summary = [
+    `60秒 ${metrics.requestsLastMinute} · 错误 ${metrics.errorsLastMinute}`,
+    `RPM ${metrics.requestsPerMinute} · 平均 ${metrics.averageDurationMs}ms`,
+    `总计 ${metrics.totalRequests} · 错误 ${metrics.totalErrors}`,
   ];
+  const entryLimit = Math.max(Math.floor((height - summary.length) / 2), 0);
+  const rows = [...summary];
+
+  for (const request of metrics.recent.slice(0, entryLimit)) {
+    rows.push(
+      `${sanitize(request.method)} ${sanitize(request.path)}`,
+      `  ${shortTime(sanitize(request.timestamp))} ${request.status ?? "ERR"} ${request.durationMs}ms ${request.provider && request.model ? `${sanitize(request.provider)}/${sanitize(request.model)}` : "—"}`,
+    );
+  }
+
+  return rows;
 }
 
 function confirmationRows(state: TuiState): string[] {
@@ -217,9 +237,9 @@ export function renderTui(
     rightWidth,
     Math.min(mainHeight, running ? 11 : 12),
   );
-  const helpHeight = Math.max(mainHeight - daemonPanel.length, 4);
-  const helpPanel = panel("操作说明", helpRows(), rightWidth, helpHeight);
-  const body = sideBySide(modelPanel, [...daemonPanel, ...helpPanel]);
+  const activityHeight = Math.max(mainHeight - daemonPanel.length, 5);
+  const activityPanel = panel("请求活动", requestRows(state, activityHeight - 2), rightWidth, activityHeight);
+  const body = sideBySide(modelPanel, [...daemonPanel, ...activityPanel]);
 
   const message = state.message && !state.switching && !state.confirming ? state.message : null;
   const footerText = message
