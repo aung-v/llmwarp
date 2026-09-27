@@ -1,19 +1,104 @@
-# Persistent TUI management interface
+# 常驻 TUI 管理界面
 
-## Goal
+## 目标
 
-Evaluate and design a long-running TUI for provider/model switching, status, logs, and future usage statistics instead of only transient commands.
+提供一个长期驻留的终端界面，让用户持续查看 llmwarp 状态，并显式切换供应商/模型。TUI 是独立客户端；daemon 不依赖 TUI 存活，也不会因 TUI 退出而停止。
 
-## Requirements
+## 背景
 
-- TBD
+- 当前 CLI 只有“选择动作 → 执行 → 返回菜单”的一次性交互，入口在 `src/commands.ts:443`。
+- 现有 UI 能力集中在 `src/ui.ts` 和 `src/searchCheckbox.ts`，使用 `@inquirer/prompts`、`@inquirer/core` 和 `picocolors`。
+- daemon 已有本地管理接口：
+  - `GET /_llmwarp/status`
+  - `POST /_llmwarp/use`
+  - `POST /_llmwarp/reload`
+- 管理接口要求 `x-llmwarp-token`；TUI 可以复用 `src/daemon.ts` 中的本地 token 读取逻辑。
+- 用户可能在其他软件中长期使用 `http://127.0.0.1:8787/v1`，所以第一版必须避免意外影响运行中的 session。
+- daemon 核心在 `src/server.ts`；TUI 不应嵌入 daemon 进程，也不应修改 `/v1/*` 代理逻辑。
 
-## Acceptance Criteria
+## 用户价值
 
-- [ ] TBD
+- 在一个终端窗口持续看到 daemon、端口、版本、当前供应商和模型。
+- 快速浏览已注册供应商和模型。
+- 通过显式确认切换当前模型，减少反复输入 `llmwarp use`。
+- 查看最近的 daemon 日志，方便排查启动或连接问题。
+- 为后续用量统计面板预留位置。
 
-## Notes
+## 已确认范围
 
-- Keep `prd.md` focused on requirements, constraints, and acceptance criteria.
-- Lightweight tasks can remain PRD-only.
-- For complex tasks, add `design.md` for technical design and `implement.md` for execution planning before `task.py start`.
+第一版采用“只读仪表盘 + 显式切换”，即方案 B：
+
+1. TUI 默认只读。
+2. 用户主动选择模型后，还必须确认一次才会调用 `POST /_llmwarp/use`。
+3. 不自动切换，不在定时刷新中重试写操作。
+4. 不提供 reload、start、stop、编辑或删除供应商。
+
+## 功能需求
+
+### 状态展示
+
+- 展示 daemon 运行状态、端口、版本、启动时间。
+- 展示当前供应商和模型。
+- 展示接入地址 `http://127.0.0.1:<port>/v1`。
+- 展示配置文件路径。
+- 定时刷新只调用只读接口，默认间隔 3 秒。
+
+### 供应商与模型列表
+
+- 从本地配置读取 `providers` 和每个供应商的 `models`。
+- 列表按配置顺序显示。
+- 支持上下键选择。
+- 没有模型的供应商只展示，不可作为切换目标。
+- 如果当前 active 模型不在配置列表中，也要显示，并提示它可能来自旧配置或手动输入。
+
+### 显式切换
+
+- 用户选择目标后，必须出现确认信息。
+- 确认后 TUI 调用 `POST /_llmwarp/use`。
+- 成功后立即刷新状态。
+- 失败时显示错误，不自动重试。
+- daemon 未运行时不启动 daemon，只显示离线状态和启动命令提示。
+
+### 日志
+
+- 展示 `~/.config/llmwarp/daemon.log` 的尾部日志。
+- 默认展示最近 200 行或终端可容纳的行数。
+- 日志面板只读，不提供删除、清空或写操作。
+
+### 退出
+
+- `q` 或 `Ctrl+C` 退出 TUI。
+- 退出时恢复终端状态。
+- TUI 崩溃或被终止不影响 daemon。
+
+## 非目标
+
+- 不修改 `/v1/*` 代理转发逻辑。
+- 不修改管理 API 路径或鉴权方式。
+- 不自动启动、停止或重启 daemon。
+- 不自动 reload 配置。
+- 不编辑、新增、删除供应商。
+- 不查询供应商上游 `/models`。
+- 不在本任务实现用量统计；只预留展示区域。
+
+## 约束
+
+- TUI 必须是独立进程。
+- daemon 不依赖 TUI 进程存在。
+- 所有写操作必须显式确认。
+- token 继续保存在本地 daemon 文件中，不得硬编码。
+- 不得把 token、API key、完整配置内容显示到 TUI。
+- 尽量复用现有 `adminRequest()` 和配置读取逻辑，避免重复实现。
+
+## 验收标准
+
+- [ ] `llmwarp tui` 打开常驻界面；`q` 或 `Ctrl+C` 退出。
+- [ ] TUI 展示 daemon 状态、端口、版本、接入地址、当前供应商和模型。
+- [ ] TUI 展示配置中的供应商和模型列表，并支持上下选择。
+- [ ] 定时刷新只调用只读接口。
+- [ ] 选择模型后必须确认；确认成功前不会调用 `POST /_llmwarp/use`。
+- [ ] 切换成功后状态立即刷新；失败时显示错误且不自动重试。
+- [ ] daemon 未运行时 TUI 显示离线状态，不自动启动 daemon。
+- [ ] TUI 展示 daemon 日志尾部，但没有任何写操作。
+- [ ] 关闭 TUI 后 daemon 继续运行。
+- [ ] `npm run typecheck` 和 `npm test` 通过。

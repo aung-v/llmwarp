@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/frontend/architecture.md", "reason": "常驻 TUI 必须遵守终端前端分层边界。"}
+{"file": ".trellis/spec/frontend/interaction-guidelines.md", "reason": "TUI 输出、确认和快捷键需要符合现有交互规范。"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "TUI 状态必须与 daemon 配置分离，并保持只读优先。"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "新增 src/tui 模块需要遵守模块边界。"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "daemon 离线、切换失败和日志读取失败需要稳定处理。"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "实现需要通过 typecheck、测试和构建。"}

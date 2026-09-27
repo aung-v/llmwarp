@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/frontend/architecture.md", "reason": "检查 TUI 是否保持独立客户端边界。"}
+{"file": ".trellis/spec/frontend/interaction-guidelines.md", "reason": "检查只读优先和显式确认交互。"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "检查 TUI 状态和 daemon 状态边界。"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "检查类型、测试和构建。"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "检查错误处理和终端恢复。"}
