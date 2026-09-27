@@ -20,6 +20,8 @@ const DISPLAY_WIDTH_RANGES = [
   [0x1f900, 0x1f9ff],
 ] as const;
 
+const ANSI_AWARE_TOKEN = /(?:\u001B\[[0-?]*[ -/]*[@-~]|\u001B\][^\u0007]*(?:\u0007|\u001B\\))|[\uD800-\uDBFF][\uDC00-\uDFFF]|[\s\S]/gu;
+
 export function visibleWidth(value: string): number {
   const clean = value.replace(ANSI_ESCAPE, "");
   let width = 0;
@@ -32,16 +34,27 @@ export function visibleWidth(value: string): number {
 }
 
 function truncate(value: string, width: number): string {
-  const clean = value.replace(ANSI_ESCAPE, "");
   let output = "";
   let currentWidth = 0;
-  for (const character of clean) {
-    const codePoint = character.codePointAt(0) ?? 0;
+  let styled = false;
+
+  for (const token of value.match(ANSI_AWARE_TOKEN) ?? []) {
+    if (token.startsWith("\u001B")) {
+      output += token;
+      styled = true;
+      continue;
+    }
+
+    const codePoint = token.codePointAt(0) ?? 0;
     const wide = DISPLAY_WIDTH_RANGES.some(([start, end]) => codePoint >= start && codePoint <= end);
     const characterWidth = wide ? 2 : 1;
     if (currentWidth + characterWidth > width) break;
-    output += character;
+    output += token;
     currentWidth += characterWidth;
+  }
+
+  if (styled) {
+    output += "\u001B[0m";
   }
   return output;
 }
@@ -86,7 +99,7 @@ function modelRows(state: TuiState, height: number): string[] {
     return rows;
   }
 
-  const hintRows = 2;
+  const hintRows = 3;
   const viewportHeight = Math.max(height - hintRows, 1);
   const firstVisible = Math.min(
     Math.max(state.selected - viewportHeight + 1, 0),
@@ -105,7 +118,7 @@ function modelRows(state: TuiState, height: number): string[] {
     const activeMark = isActive ? "  ● 当前激活" : "";
     const text = `${marker} ${sanitize(entry.label)}${activeMark}${entry.selectable ? "" : "  不可选"}`;
     if (selected) {
-      rows.push(isActive ? pc.bgGreen(pc.black(text)) : pc.bgCyan(pc.black(text)));
+      rows.push(isActive ? pc.bgBlue(pc.green(text)) : pc.bgBlue(pc.white(text)));
     } else if (isActive) {
       rows.push(pc.bold(pc.green(text)));
     } else {
@@ -115,7 +128,8 @@ function modelRows(state: TuiState, height: number): string[] {
   }
 
   rows.push("");
-  rows.push(pc.dim("绿色 = 当前激活，蓝底 = 键盘选中"));
+  rows.push(pc.dim("绿色字 = 当前激活"));
+  rows.push(pc.dim("蓝底 = 键盘选中；蓝底绿字 = 当前且选中"));
   return rows;
 }
 
@@ -185,7 +199,7 @@ export function renderTui(
   const running = Boolean(state.status);
 
   const active = state.status?.active;
-  const activeLabel = active?.model ? `${sanitize(active.provider)} / ${sanitize(active.model)}` : "—";
+  const activeLabel = active?.model ? `${sanitize(active.provider)}/${sanitize(active.model)}` : "—";
   const header = [
     `${pc.bgCyan(pc.black(" ⚡ llmwarp TUI "))} ${statusBadge(running)} ${pc.dim("显式切换，不影响代理服务")}`,
     `${pc.bold("当前激活")}  ${running && active ? pc.green(activeLabel) : "—"}`,

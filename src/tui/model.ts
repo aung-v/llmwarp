@@ -34,7 +34,7 @@ export function buildCatalog(config: Config, status?: StatusSnapshot | null): Ca
       entries.push({
         provider,
         model: null,
-        label: `${provider} / (no models)`,
+        label: `${provider}/(no models)`,
         selectable: false,
       });
       continue;
@@ -44,7 +44,7 @@ export function buildCatalog(config: Config, status?: StatusSnapshot | null): Ca
       entries.push({
         provider,
         model,
-        label: `${provider} / ${model}`,
+        label: `${provider}/${model}`,
         selectable: true,
       });
     }
@@ -59,7 +59,7 @@ export function buildCatalog(config: Config, status?: StatusSnapshot | null): Ca
     entries.push({
       provider: active.provider,
       model: active.model,
-      label: `${active.provider} / ${active.model}`,
+      label: `${active.provider}/${active.model}`,
       selectable: true,
       legacy: true,
     });

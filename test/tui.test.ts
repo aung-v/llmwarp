@@ -36,7 +36,7 @@ test("buildCatalog 按配置顺序展开供应商模型", () => {
   const entries = buildCatalog(config);
   assert.deepEqual(
     entries.map((entry) => entry.label),
-    ["ark / glm-5.3-flash", "deepseek / deepseek-chat", "local / (no models)"],
+    ["ark/glm-5.3-flash", "deepseek/deepseek-chat", "local/(no models)"],
   );
   assert.equal(entries.at(-1)?.selectable, false);
 });
@@ -52,8 +52,8 @@ test("buildCatalog 保留配置中缺少的 active 模型", () => {
     status,
   );
   assert.deepEqual(entries.map((entry) => entry.label), [
-    "ark / old-model",
-    "ark / glm-5.3-flash",
+    "ark/old-model",
+    "ark/glm-5.3-flash",
   ]);
   assert.equal(entries.at(-1)?.legacy, true);
 });
@@ -98,7 +98,7 @@ test("渲染包含状态且不泄露密钥", () => {
   assert.match(output, /守护进程/);
   assert.match(output, /运行中/);
   assert.match(output, /http:\/\/127\.0\.0\.1:8787\/v1/);
-  assert.match(output, /ark \/ glm-5\.3-flash/);
+  assert.match(output, /ark\/glm-5\.3-flash/);
   assert.match(output, /当前激活/);
   assert.match(output, /↑↓ 选择模型/);
   assert.match(output, /2026-09-27T00:00:00\.000Z/);
@@ -143,7 +143,7 @@ test("确认态显示目标和取消方式", () => {
   const output = renderTui(state, { height: 24, width: 80 });
 
   assert.match(output, /确认切换/);
-  assert.match(output, /目标模型\s+ark \/ glm-5\.3-flash/);
+  assert.match(output, /目标模型\s+ark\/glm-5\.3-flash/);
   assert.match(output, /y 确认切换\s+n \/ Esc 取消/);
 });
 
@@ -164,5 +164,15 @@ test("渲染面板不会因彩色行改变宽度", () => {
 
   for (const line of output.split("\n").filter((row) => /^[╭│╰]/.test(row))) {
     assert.equal(visibleWidth(line), 80);
+  }
+});
+
+test("面板补空格时保留行内颜色", () => {
+  const state = createTuiState(buildCatalog(config), status);
+  const output = renderTui(state, { height: 24, width: 80 });
+
+  if (output.includes("\u001B[")) {
+    assert.match(output, /\u001B\[32m/);
+    assert.match(output, /\u001B\[44m/);
   }
 });
