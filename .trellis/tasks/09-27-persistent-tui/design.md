@@ -34,12 +34,6 @@ llmwarp tui
 llmwarp tui
 ```
 
-可选别名：
-
-```text
-llmwarp ui
-```
-
 默认的 `llmwarp` 无参数菜单保持不变。
 
 ## 文件边界

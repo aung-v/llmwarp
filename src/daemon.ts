@@ -7,11 +7,10 @@ import {
   clearDaemonInfo,
   ensureConfigDir,
   CONFIG_DIR,
+  DAEMON_LOG,
   type DaemonInfo,
 } from "./config.js";
 import { isPortInUse, findPortOwner, looksLikeLlwarp, waitPortFree, portInUseMessage } from "./net.js";
-
-const DAEMON_LOG = join(CONFIG_DIR, "daemon.log");
 
 export function isAlive(pid: number): boolean {
   try {

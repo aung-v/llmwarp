@@ -15,6 +15,7 @@ import {
   stopCommand,
   useCommand,
 } from "./commands.js";
+import { startTui } from "./tui/index.js";
 
 async function run(fn: () => void | Promise<void>): Promise<void> {
   try {
@@ -68,6 +69,7 @@ program
   );
 
 program.command("status").alias("st").description("查看当前状态").action(() => run(statusCommand));
+program.command("tui").description("打开常驻管理界面").action(() => run(startTui));
 program
   .command("remove [provider]")
   .alias("rm")

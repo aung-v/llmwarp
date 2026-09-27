@@ -27,7 +27,6 @@
 
 5. 注册 CLI 命令
    - 在 `src/cli.ts` 添加 `llmwarp tui`。
-   - 添加 `ui` 别名。
 
 6. 增加单元测试
    - catalog 构建顺序。

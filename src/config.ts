@@ -40,6 +40,7 @@ export const CONFIG_DIR = join(
 );
 export const CONFIG_PATH = join(CONFIG_DIR, "config.jsonc");
 export const DAEMON_PATH = join(CONFIG_DIR, "daemon.json");
+export const DAEMON_LOG = join(CONFIG_DIR, "daemon.log");
 
 const FORMAT: FormattingOptions = { tabSize: 2, insertSpaces: true, eol: "\n" };
 
