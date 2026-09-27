@@ -8,7 +8,6 @@ import {
   createTuiState,
   selectNext,
   selectPrevious,
-  tailLines,
   type StatusSnapshot,
 } from "../src/tui/model.js";
 import { renderTui, visibleWidth } from "../src/tui/render.js";
@@ -60,7 +59,7 @@ test("buildCatalog 保留配置中缺少的 active 模型", () => {
 
 test("TUI 选择有边界且确认可以取消", () => {
   const entries = buildCatalog(config);
-  let state = createTuiState(entries, status, []);
+  let state = createTuiState(entries, status);
   assert.equal(state.selected, 0);
 
   state = selectPrevious(state);
@@ -76,7 +75,7 @@ test("TUI 选择有边界且确认可以取消", () => {
 
 test("只有确认后才会进入切换状态", () => {
   const entries = buildCatalog(config);
-  let state = createTuiState(entries, status, []);
+  let state = createTuiState(entries, status);
 
   assert.equal(beginSwitch(state), null);
 
@@ -88,33 +87,34 @@ test("只有确认后才会进入切换状态", () => {
   assert.equal(state.confirming, false);
 });
 
-test("日志尾部保留最多 200 行", () => {
-  const logs = tailLines(Array.from({ length: 220 }, (_, index) => `line-${index + 1}`).join("\n"), 200);
-  assert.equal(logs.length, 200);
-  assert.equal(logs[0], "line-21");
-  assert.equal(logs.at(-1), "line-220");
-});
-
 test("渲染包含状态且不泄露密钥", () => {
-  const state = createTuiState(buildCatalog(config), status, ["daemon started"]);
+  const state = createTuiState(buildCatalog(config), status);
   const output = renderTui(state, { height: 24, width: 80 });
 
   assert.match(output, /llmwarp TUI/);
+  assert.match(output, /当前激活/);
   assert.match(output, /可切换模型/);
   assert.match(output, /守护进程/);
-  assert.match(output, /日志/);
   assert.match(output, /运行中/);
   assert.match(output, /http:\/\/127\.0\.0\.1:8787\/v1/);
   assert.match(output, /ark \/ glm-5\.3-flash/);
-  assert.match(output, /当前/);
+  assert.match(output, /当前激活/);
   assert.match(output, /↑↓ 选择模型/);
   assert.match(output, /2026-09-27T00:00:00\.000Z/);
-  assert.match(output, /daemon started/);
   assert.doesNotMatch(output, /secret-key/);
 });
 
+test("渲染不展示日志面板并说明刷新操作", () => {
+  const state = createTuiState(buildCatalog(config), status);
+  const output = renderTui(state, { height: 24, width: 80 });
+
+  assert.doesNotMatch(output, /日志/);
+  assert.match(output, /操作说明/);
+  assert.match(output, /r 立即重新读取 daemon 状态和配置/);
+});
+
 test("确认态显示目标和取消方式", () => {
-  let state = createTuiState(buildCatalog(config), status, []);
+  let state = createTuiState(buildCatalog(config), status);
   state = beginConfirm(state);
   const output = renderTui(state, { height: 24, width: 80 });
 
@@ -123,16 +123,19 @@ test("确认态显示目标和取消方式", () => {
   assert.match(output, /y 确认切换\s+n \/ Esc 取消/);
 });
 
-test("渲染会清除日志中的控制序列", () => {
-  const state = createTuiState(buildCatalog(config), status, ["\u001B[31mdangerous\u001B[0m"]);
+test("渲染会清除配置文本中的控制序列", () => {
+  const state = createTuiState(buildCatalog(config), {
+    ...status,
+    configPath: "\u001B[31m/tmp/dangerous/config.jsonc\u001B[0m",
+  });
   const output = renderTui(state, { height: 24, width: 80 });
 
   assert.doesNotMatch(output, /\u001B\[31m/);
-  assert.match(output, /dangerous/);
+  assert.match(output, /\/tmp\/dangerous\/config\.jsonc/);
 });
 
 test("渲染面板不会因彩色行改变宽度", () => {
-  const state = createTuiState(buildCatalog(config), status, []);
+  const state = createTuiState(buildCatalog(config), status);
   const output = renderTui(state, { height: 24, width: 80 });
 
   for (const line of output.split("\n").filter((row) => /^[╭│╰]/.test(row))) {

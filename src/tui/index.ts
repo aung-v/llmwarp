@@ -1,6 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
 import readline from "node:readline";
-import { DAEMON_LOG, loadConfig } from "../config.js";
+import { loadConfig } from "../config.js";
 import { adminRequest, daemonRunning } from "../daemon.js";
 import {
   beginConfirm,
@@ -13,7 +12,6 @@ import {
   selectNext,
   selectPrevious,
   selectedEntry,
-  tailLines,
   type CatalogItem,
   type StatusSnapshot,
   type TuiState,
@@ -21,20 +19,10 @@ import {
 import { renderTui } from "./render.js";
 
 const REFRESH_MS = 3000;
-const LOG_LIMIT = 200;
 const HIDE_CURSOR = "\u001B[?25l";
 const SHOW_CURSOR = "\u001B[?25h";
 const ENTER_ALTERNATE_SCREEN = "\u001B[?1049h\u001B[H\u001B[2J";
 const LEAVE_ALTERNATE_SCREEN = "\u001B[?1049l";
-
-function readDaemonLog(): string[] {
-  try {
-    if (!existsSync(DAEMON_LOG)) return [];
-    return tailLines(readFileSync(DAEMON_LOG, "utf8"), LOG_LIMIT);
-  } catch {
-    return [];
-  }
-}
 
 async function readCatalog(status: StatusSnapshot | null): Promise<CatalogItem[]> {
   try {
@@ -49,7 +37,7 @@ export async function startTui(): Promise<void> {
     throw new Error("TUI 需要交互式终端");
   }
 
-  let state: TuiState = createTuiState([], null, []);
+  let state: TuiState = createTuiState([], null);
   let refreshing = false;
   let stopped = false;
   let cleanup: (() => void) | undefined;
@@ -61,10 +49,10 @@ export async function startTui(): Promise<void> {
   const draw = (): void => {
     if (stopped) return;
     process.stdout.write(
-      `\u001B[H\u001B[2J${renderTui(state, {
+      `\u001B[H${renderTui(state, {
         height: process.stdout.rows ?? 24,
         width: process.stdout.columns ?? 80,
-      })}`,
+      })}\u001B[J`,
     );
   };
 
@@ -76,7 +64,18 @@ export async function startTui(): Promise<void> {
       const running = daemonRunning();
       const status = running ? parseStatusSnapshot(await adminRequest("GET", "status")) : null;
       const entries = await readCatalog(status);
-      state = createTuiState(entries, status, readDaemonLog());
+      const previousEntry = state.entries[state.selected];
+      const previousSelected = previousEntry
+        ? entries.findIndex(
+            (entry) =>
+              entry.provider === previousEntry.provider && entry.model === previousEntry.model,
+          )
+        : -1;
+      const previousConfirming = state.confirming;
+      state = createTuiState(entries, status);
+      if (previousSelected >= 0) state.selected = previousSelected;
+      state.confirming =
+        previousConfirming && Boolean(state.entries[state.selected]?.selectable);
       state.message = message;
     } catch (err) {
       state.message = (err as Error).message;

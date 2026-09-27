@@ -82,7 +82,7 @@ function modelRows(state: TuiState, height: number): string[] {
   if (state.entries.length === 0) {
     rows.push(pc.dim("暂无模型，请先运行 llmwarp add"));
     rows.push("");
-    rows.push("↑↓ 选择 Enter 确认 r 刷新 q 退出");
+    rows.push("↑↓ 选择  Enter 确认  q 退出");
     return rows;
   }
 
@@ -101,14 +101,20 @@ function modelRows(state: TuiState, height: number): string[] {
       active && active.provider === entry.provider && active.model === entry.model,
     );
     const selected = actualIndex === state.selected;
-    const marker = selected ? "›" : " ";
-    const activeMark = isActive ? "  ● 当前" : "";
+    const marker = selected ? "▸" : " ";
+    const activeMark = isActive ? "  ● 当前激活" : "";
     const text = `${marker} ${sanitize(entry.label)}${activeMark}${entry.selectable ? "" : "  不可选"}`;
-    rows.push(selected ? pc.inverse(text) : entry.selectable ? text : pc.dim(text));
+    if (selected) {
+      rows.push(pc.bgCyan(pc.black(text)));
+    } else if (isActive) {
+      rows.push(pc.green(text));
+    } else {
+      rows.push(entry.selectable ? text : pc.dim(text));
+    }
   }
 
   rows.push("");
-  rows.push("↑↓ 选择 Enter 确认 r 刷新 q 退出");
+  rows.push(pc.dim("绿色 = 当前激活，蓝底 = 键盘选中"));
   return rows;
 }
 
@@ -139,10 +145,15 @@ function daemonRows(state: TuiState): string[] {
   ];
 }
 
-function logRows(state: TuiState, height: number): string[] {
-  const rows = state.logs.slice(Math.max(state.logs.length - height, 0)).map(sanitize);
-  if (rows.length > 0) return rows;
-  return [pc.dim("暂无日志")];
+function helpRows(): string[] {
+  return [
+    "↑↓ 选择模型",
+    "Enter 进入切换确认",
+    "y 确认切换",
+    "n / Esc 取消确认",
+    "r 立即重新读取 daemon 状态和配置",
+    "q 退出（不影响 daemon）",
+  ];
 }
 
 function confirmationRows(state: TuiState): string[] {
@@ -172,8 +183,11 @@ export function renderTui(
   const width = Math.max(options.width ?? 80, 72);
   const running = Boolean(state.status);
 
+  const active = state.status?.active;
+  const activeLabel = active?.model ? `${sanitize(active.provider)} / ${sanitize(active.model)}` : "—";
   const header = [
     `${pc.bgCyan(pc.black(" ⚡ llmwarp TUI "))} ${statusBadge(running)} ${pc.dim("显式切换，不影响代理服务")}`,
+    `${pc.bold("当前激活")}  ${running && active ? pc.green(activeLabel) : "—"}`,
   ];
 
   const notice = confirmationRows(state);
@@ -188,14 +202,14 @@ export function renderTui(
     rightWidth,
     Math.min(mainHeight, running ? 11 : 12),
   );
-  const logHeight = Math.max(mainHeight - daemonPanel.length, 3);
-  const logPanel = panel("日志", logRows(state, logHeight - 2), rightWidth, logHeight);
-  const body = sideBySide(modelPanel, [...daemonPanel, ...logPanel]);
+  const helpHeight = Math.max(mainHeight - daemonPanel.length, 4);
+  const helpPanel = panel("操作说明", helpRows(), rightWidth, helpHeight);
+  const body = sideBySide(modelPanel, [...daemonPanel, ...helpPanel]);
 
   const message = state.message && !state.switching && !state.confirming ? state.message : null;
   const footerText = message
     ? `${sanitize(message)}    ↑↓ 选择  Enter 确认  r 刷新  q 退出`
-    : "↑↓ 选择模型  Enter 确认切换  r 刷新  q 退出";
+    : "↑↓ 选择模型  Enter 确认切换  r 手动刷新  q 退出";
   const footer = [pc.dim(truncate(footerText, width))];
 
   const noticeRows =

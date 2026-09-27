@@ -20,7 +20,6 @@ export interface TuiState {
   selected: number;
   confirming: boolean;
   status: StatusSnapshot | null;
-  logs: string[];
   message: string | null;
   switching: boolean;
 }
@@ -70,7 +69,6 @@ export function buildCatalog(config: Config, status?: StatusSnapshot | null): Ca
 export function createTuiState(
   entries: CatalogItem[],
   status: StatusSnapshot | null,
-  logs: string[],
 ): TuiState {
   const active = status?.active;
   const activeIndex = active?.model
@@ -83,7 +81,6 @@ export function createTuiState(
     selected: selected >= 0 ? selected : 0,
     confirming: false,
     status,
-    logs,
     message: null,
     switching: false,
   };
@@ -120,11 +117,6 @@ export function beginSwitch(state: TuiState): TuiState | null {
 
 export function finishSwitch(state: TuiState, message: string | null): TuiState {
   return { ...state, switching: false, message };
-}
-
-export function tailLines(text: string, maxLines: number): string[] {
-  const lines = text.replace(/\r/g, "").split("\n").filter((line) => line.length > 0);
-  return lines.slice(Math.max(lines.length - maxLines, 0));
 }
 
 export function parseStatusSnapshot(payload: unknown): StatusSnapshot | null {
