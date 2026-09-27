@@ -11,7 +11,7 @@ import {
   tailLines,
   type StatusSnapshot,
 } from "../src/tui/model.js";
-import { renderTui } from "../src/tui/render.js";
+import { renderTui, visibleWidth } from "../src/tui/render.js";
 import type { Config } from "../src/config.js";
 
 const status: StatusSnapshot = {
@@ -97,11 +97,17 @@ test("日志尾部保留最多 200 行", () => {
 
 test("渲染包含状态且不泄露密钥", () => {
   const state = createTuiState(buildCatalog(config), status, ["daemon started"]);
-  const output = renderTui(state, { height: 24 });
+  const output = renderTui(state, { height: 24, width: 80 });
 
   assert.match(output, /llmwarp TUI/);
+  assert.match(output, /可切换模型/);
+  assert.match(output, /守护进程/);
+  assert.match(output, /日志/);
+  assert.match(output, /运行中/);
   assert.match(output, /http:\/\/127\.0\.0\.1:8787\/v1/);
   assert.match(output, /ark \/ glm-5\.3-flash/);
+  assert.match(output, /当前/);
+  assert.match(output, /↑↓ 选择模型/);
   assert.match(output, /2026-09-27T00:00:00\.000Z/);
   assert.match(output, /daemon started/);
   assert.doesNotMatch(output, /secret-key/);
@@ -110,16 +116,26 @@ test("渲染包含状态且不泄露密钥", () => {
 test("确认态显示目标和取消方式", () => {
   let state = createTuiState(buildCatalog(config), status, []);
   state = beginConfirm(state);
-  const output = renderTui(state, { height: 24 });
+  const output = renderTui(state, { height: 24, width: 80 });
 
-  assert.match(output, /Switch active model to ark \/ glm-5\.3-flash\?/);
-  assert.match(output, /n\/Esc = cancel/);
+  assert.match(output, /确认切换/);
+  assert.match(output, /目标模型\s+ark \/ glm-5\.3-flash/);
+  assert.match(output, /y 确认切换\s+n \/ Esc 取消/);
 });
 
 test("渲染会清除日志中的控制序列", () => {
   const state = createTuiState(buildCatalog(config), status, ["\u001B[31mdangerous\u001B[0m"]);
-  const output = renderTui(state, { height: 24 });
+  const output = renderTui(state, { height: 24, width: 80 });
 
   assert.doesNotMatch(output, /\u001B\[31m/);
   assert.match(output, /dangerous/);
+});
+
+test("渲染面板不会因彩色行改变宽度", () => {
+  const state = createTuiState(buildCatalog(config), status, []);
+  const output = renderTui(state, { height: 24, width: 80 });
+
+  for (const line of output.split("\n").filter((row) => /^[╭│╰]/.test(row))) {
+    assert.equal(visibleWidth(line), 80);
+  }
 });

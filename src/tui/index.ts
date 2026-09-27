@@ -61,7 +61,10 @@ export async function startTui(): Promise<void> {
   const draw = (): void => {
     if (stopped) return;
     process.stdout.write(
-      `\u001B[H\u001B[2J${renderTui(state, { height: process.stdout.rows ?? 24 })}`,
+      `\u001B[H\u001B[2J${renderTui(state, {
+        height: process.stdout.rows ?? 24,
+        width: process.stdout.columns ?? 80,
+      })}`,
     );
   };
 
