@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "检查实现是否满足测试与类型检查要求。"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "检查本地路由错误和流式转发错误处理。"}
