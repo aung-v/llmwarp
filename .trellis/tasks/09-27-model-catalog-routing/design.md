@@ -23,7 +23,7 @@ GET /v1/models
   "object": "list",
   "data": [
     {
-      "id": "active",
+      "id": "warp",
       "object": "model",
       "created": 0,
       "owned_by": "llmwarp"
@@ -55,19 +55,19 @@ GET /v1/models
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `id` | string | 客户端请求时使用的模型 ID；例如 `active`、`deepseek/deepseek-chat` |
+| `id` | string | 客户端请求时使用的模型 ID；例如 `warp`、`deepseek/deepseek-chat` |
 | `object` | string | 固定为 `"model"` |
 | `created` | integer | 本地目录不掌握上游模型的创建时间，所以固定为 `0`，表示 unknown |
-| `owned_by` | string | `active` 固定为 `"llmwarp"`；普通模型是这个模型的供应商名 |
+| `owned_by` | string | `warp` 固定为 `"llmwarp"`；普通模型是这个模型的供应商名 |
 
 #### 返回内容和顺序
 
-1. 如果当前存在可路由的 `activeProvider` + `activeModel`，第一个元素是 `active`。
+1. 如果当前存在可路由的 `activeProvider` + `activeModel`，第一个元素是 `warp`。
 2. 然后按配置文件中 `providers` 的顺序遍历供应商。
 3. 每个供应商内部按 `models` 数组的顺序返回。
 4. 每个普通模型 ID 的格式是 `{provider}/{model}`。
 5. 相同的 `{provider}/{model}` 只返回一次。
-6. 如果当前没有可路由的 active model，就不返回 `active` 项，但仍然返回其他已注册模型。
+6. 如果当前没有可路由的激活模型，就不返回 `warp` 项，但仍然返回其他已注册模型。
 
 #### 不返回的内容
 
@@ -79,24 +79,27 @@ GET /v1/models
 
 ### 3. 本地模型对象语义
 
-- `active` 是虚拟模型名，代表当前 `activeProvider` + `activeModel`。
+- `warp` 是虚拟模型名，代表当前 `activeProvider` + `activeModel`。
 - `{provider}/{model}` 由配置文件里每个供应商的 `models` 数组生成。
 - 模型名里可以继续有 `/`；本地模型 ID 只取第一个 `/` 作为供应商分隔符。
 - `owned_by` 只表示 llmwarp 中的供应商名，不表示上游模型的真实组织名。
 
 ### 2. 请求路由规则
 
+顶层配置 `useClientModel`（布尔，默认 `true`）决定请求里的 `model` 是“客户端说了算”还是“统一用当前选择”。两档下名字都必须在 `/v1/models` 列表内，列表外一律报错。
+
+| 客户端传的 `model` | `useClientModel: true` | `useClientModel: false` |
+|---|---|---|
+| `"warp"` | 当前激活模型；上游 `model` 改写为 `activeModel` | 当前激活模型；上游 `model` 改写为 `activeModel` |
+| `"deepseek/deepseek-chat"` | 使用 `deepseek`；上游 `model` 改写为 `deepseek-chat` | 当前激活模型；上游 `model` 改写为 `activeModel` |
+| `"openrouter/meta/llama-3"` | 使用 `openrouter`；上游 `model` 改写为 `meta/llama-3` | 当前激活模型；上游 `model` 改写为 `activeModel` |
+| `"gpt-4o"` 这类裸模型名 | 本地错误 | 本地错误 |
+| 列表外的名字 | 本地错误 | 本地错误 |
+| 缺失或为空 | 兼容兜底，使用当前激活供应商 | 使用当前激活供应商 |
+
 文档里的 `{provider}` 和 `{model}` 是占位符，真实模型 ID 不带花括号。
 
-| 客户端传的 `model` | 路由结果 |
-|---|---|
-| `"active"` | 使用当前激活供应商；上游 `model` 改写为 `activeModel` |
-| `"deepseek/deepseek-chat"` | 使用 `deepseek` 供应商；上游 `model` 改写为 `deepseek-chat` |
-| `"openrouter/meta/llama-3"` | 使用 `openrouter` 供应商；上游 `model` 改写为 `meta/llama-3` |
-| `"gpt-4o"` 这类普通模型名 | 在所有已注册模型里精确匹配；唯一命中时路由到对应供应商 |
-| 缺失或为空 | 兼容兜底，使用当前激活供应商 |
-
-如果 `{provider}/{model}` 里的 provider 不存在，返回：
+`{provider}/{model}` 里的 provider 不存在时，返回：
 
 ```json
 {
@@ -107,20 +110,7 @@ GET /v1/models
 }
 ```
 
-如果 provider 存在，但模型不在该 provider 的 `models` 列表里，仍然允许转发。原因是本地模型列表可能是旧数据，上游模型仍然有效。
-
-如果普通模型名在多个供应商里都存在，返回：
-
-```json
-{
-  "error": {
-    "message": "ambiguous model: {model}",
-    "type": "ambiguous_model"
-  }
-}
-```
-
-如果普通模型名不存在，返回：
+名字不在 `/v1/models` 列表里时（裸模型名、provider 存在但模型未注册、拼错的名字），返回：
 
 ```json
 {
@@ -131,7 +121,7 @@ GET /v1/models
 }
 ```
 
-普通模型名不再静默改写成 `active`。这样可以避免客户端以为自己选了模型 A，但实际被改写成了当前激活模型 B。
+列表外的名字一律不转发上游。校验只有一套，与 `useClientModel` 取值无关；开关只决定“通过校验之后，用客户端指定的模型，还是用当前激活模型”。
 
 ## 名称与特殊字符规则
 
@@ -165,12 +155,13 @@ GET /v1/models
 
 这样既能支持类似 `deepseek-chat` 的常见 ID，也能支持 `meta/llama-3`、`qwen/qwen3-32b`，以及某些服务商可能使用的带空格或特殊符号的模型 ID。
 
-## 待确认决策
+## 已确认决策（2026-09-29）
 
-1. 动态模型名使用 `active`。
+1. 动态模型名使用 `warp`。
 2. 显式路由语法使用 `{provider}/{model}`；花括号只表示文档占位符。
 3. 只把第一个 `/` 当作供应商分隔符，模型名可以继续包含 `/`。
-4. 普通模型名必须唯一命中已注册模型才路由；否则返回错误，不再静默映射到当前激活模型。
+4. 合法名字只有两种：`warp`，或某个 `{provider}/{model}`。其他（含任何裸模型名）一律本地报错、不转发上游。原来的“裸模型名唯一命中即可路由”规则作废。
+5. 新增顶层配置 `useClientModel`（布尔，默认 `true`）：`true` 尊重客户端指定的模型，`false` 统一落到当前激活模型。
 
 ## 模块边界
 
@@ -192,9 +183,9 @@ GET /v1/models
 
 ## 兼容性
 
-- 现有客户端传 `active` 时，继续使用当前激活模型。
 - 现有客户端不传 `model` 时，仍然尽量保持原请求体转发。
-- 普通模型名从“静默映射到激活模型”改为“精确匹配；失败则报错”。这是行为变化，会在测试里固定。
+- 模型名从“随便填都会被改写成激活模型”改为“必须是 `/v1/models` 里的名字，否则报错”。这是行为变化，会在测试里固定。
+- 需要恢复“统一用当前选择”的行为时，把 `useClientModel` 设为 `false`；名字仍然必须在列表里。
 - 管理接口、token 鉴权方式不变。
 - SSE 和普通响应继续流式转发。
 

@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/frontend/architecture.md", "reason": "'TUI"}
+{"file": ".trellis/spec/frontend/interaction-guidelines.md", "reason": "'确认交互、键位提示与中文文案'"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "'配置文件是唯一"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "'写配置或"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "'typecheck/test/build"}
