@@ -70,3 +70,25 @@ Shipped the local model catalog + routing: GET /v1/models lists warp plus every 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 3: Reject illegal model names on llmwarp use write paths
+<!-- trellis-session: v=2 fp=5c5cf90819b308ac -->
+
+**Date**: 2026-09-30
+**Task**: Reject illegal model names on llmwarp use write paths
+**Branch**: `master`
+
+### Summary
+
+Closed the write side of the model-name rule: llmwarp use's three entry paths (--model, manual prompt for an empty models list, selectModel's manual entry) now validate with config.isValidModelName before writing activeModel. An illegal --model returns with zero side effects; illegal interactive input is reported and re-prompted. Resolution moved into an injected-callback helper so it is testable without a TTY. Review found the first integration test did not exercise the refresh branch, so a models:[] case with a stubbed fetch now proves no network call, no models write, no activeModel write, no daemon.json. Verified: typecheck, build, 58/58 tests.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `035a0ab` | fix: reject illegal model names on llmwarp use write paths |
+
+### Status
+
+[OK] **Completed**
