@@ -48,3 +48,25 @@ TUI model switches now survive daemon restart and config reload by persisting th
 
 - Decide the restart key binding (R vs Ctrl+R) and the daemon-offline key semantics for 09-29-tui-daemon-restart.
 - Optional: also set XDG_CONFIG_HOME in temp-HOME tests to close the pre-existing isolation gap.
+
+
+## Session 2: Model catalog and provider-prefixed routing
+<!-- trellis-session: v=2 fp=ea950a13ec02450c -->
+
+**Date**: 2026-09-29
+**Task**: Model catalog and provider-prefixed routing
+**Branch**: `master`
+
+### Summary
+
+Shipped the local model catalog + routing: GET /v1/models lists warp plus every {provider}/{model}; resolveModelRoute validates names locally (warp and registered {provider}/{model} only, otherwise 400 with unknown_model/unknown_provider and no upstream call); top-level useClientModel (default true) switches between honoring the client model and collapsing to the active model. Decided with the user that provider and model names may never contain whitespace, provider names may never contain '/', and llmwarp add rejects such names before writing config (existing configs only warn). Strengthened the SSE tests to read chunks via res.body.getReader() so a buffering proxy now fails, and verified with a mutation test on src/proxy.ts. Updated README, the llmwarp design doc, and .trellis/spec (new backend/model-routing.md). Verified: typecheck, build, 51/51 tests.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f2b0a6c` | feat: local model catalog with warp alias and provider-prefixed routing |
+
+### Status
+
+[OK] **Completed**
