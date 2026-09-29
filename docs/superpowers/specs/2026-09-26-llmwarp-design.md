@@ -193,6 +193,7 @@ llmwarp 是一个**纯本地的 OpenAI 协议路由器 + 切换 CLI**。
   2. 选择模型（方向键；列表来自 `provider.models`）。
   3. 写入 `activeProvider`/`activeModel` 并调用管理端点即时生效。
 - 支持非交互：`llmwarp use <provider> --model <model>`；`llmwarp use <provider> --list` 打印该供应商模型列表。
+- 模型名校验：`use` 的三条入口（`--model`、models 为空时的手动输入、选择列表里的手动输入）在写入 `activeModel` 之前统一按模型名规则校验（非空、不含空白或控制字符）。`--model` 非法时直接报错并零副作用返回（不刷新列表、不写配置、不启动守护进程）；交互输入非法时提示错误并重新要求输入。列表外的合法名字仍按既有行为使用并给出警告。
 - 支持刷新：`llmwarp use <provider> --refresh` 重新查询 `<baseUrl>/models` 并更新配置中的 `models`。
 
 ---
@@ -206,7 +207,7 @@ llmwarp 是一个**纯本地的 OpenAI 协议路由器 + 切换 CLI**。
 | `llmwarp add` | 向导式新增供应商 |
 | `llmwarp edit [provider]` | 编辑供应商（baseUrl/apiKey/models）；`--file` 用 $EDITOR 打开配置文件 |
 | `llmwarp list` | 表格列出供应商：名称、baseUrl、模型数、是否 active |
-| `llmwarp use [provider] [--model M] [--list] [--refresh]` | 切换供应商/模型；无参时交互选择 |
+| `llmwarp use [provider] [--model M] [--list] [--refresh]` | 切换供应商/模型；无参时交互选择；非法模型名（含空白/控制字符）直接拒绝 |
 | `llmwarp status` | 当前 active、守护进程状态、端口、配置路径；可选探测上游可达性 |
 | `llmwarp remove [provider]` | 移除供应商（无参时多选） |
 | `llmwarp reload` | 让运行中的守护进程重读配置 |

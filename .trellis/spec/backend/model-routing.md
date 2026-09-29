@@ -26,6 +26,7 @@
 - Missing or empty `model` falls back to `warp` (compatibility only, not a documented usage).
 - Provider names: non-empty, no `/`, no whitespace, no control characters.
 - Model names: non-empty, no whitespace, no control characters; `/`, `.`, `:`, `-`, `_`, and Unicode are allowed. Names are matched exactly (no case folding, no trimming).
+- The rule is enforced on the **write side** too: `llmwarp use` validates every entry path (`--model`, the manual prompt for an empty `models` list, and `selectModel`'s manual entry) with `isValidModelName` before writing `activeModel`. An invalid `--model` returns with zero side effects (no model-list refresh, no `setProviderModels`, no `activeModel` write, no daemon start); an invalid interactive entry re-prompts. A valid name that is merely absent from `provider.models` is still accepted with a warning.
 - `useClientModel: true` honours the client's name; `false` collapses everything to the current active provider/model. Validation happens **before** this branch, so unlisted names error in both modes.
 - `/v1/models` never contains `apiKey`, `baseUrl`, or the admin token. `warp` is `owned_by: "llmwarp"`; other entries are `owned_by: <providerName>`. Entries are deduped by id and returned in config order.
 - Local routing failures return `{ "error": { "message": ..., "type": ... } }` and **no upstream request is made**.
@@ -41,6 +42,7 @@
 | provider not registered, or name invalid | `400` `unknown_provider`, no upstream request |
 | model not in the provider's `models`, or name has whitespace/control chars | `400` `unknown_model`, no upstream request |
 | provider/model name invalid in config | non-fatal `configWarnings()` entry; the provider still works for `warp`/active routing |
+| `llmwarp use --model "<illegal>"` | `fail(...)` and return before any config/daemon side effect |
 
 ### 5. Good/Base/Bad Cases
 

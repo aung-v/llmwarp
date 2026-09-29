@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/model-routing.md", "reason": "模型名合法性规则（非空、不含空白与控制字符）与 isValidModelName 的定义在这里。"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "CLI 失败路径要走 fail() 并给出可执行提示，且不能有副作用。"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "实现需要通过 typecheck 与 Node test，并保持断言点明确。"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "改动落在 src/commands.ts、src/ui.ts 与对应测试文件。"}

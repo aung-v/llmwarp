@@ -5,6 +5,7 @@ import {
   configExists,
   ensureConfigDir,
   getPort,
+  isValidModelName,
   isValidProviderName,
   loadConfig,
   removeProvider,
@@ -186,12 +187,74 @@ export interface UseOptions {
   refresh?: boolean;
 }
 
+/** 非法模型名的统一错误文案（校验规则来自 config.isValidModelName）。 */
+function modelNameErrorMessage(value: string): string {
+  return `模型名 "${value}" 不合法：模型名不能包含空白或控制字符`;
+}
+
+/** resolveModelName 的注入式交互接口，便于脱离 TTY 做单元测试。 */
+export interface ModelNamePrompt {
+  /** 预设模型名（来自 `--model`）；提供后不再交互。 */
+  preset?: string;
+  /** 该供应商已有的模型列表；为空时只能手动输入。 */
+  models: string[];
+  /** 从已有列表里选择一个模型（可能包含手动输入的结果）。 */
+  selectFromList: () => Promise<string>;
+  /** 手动输入模型名；返回空串表示用户取消。 */
+  promptManual: () => Promise<string>;
+  /** 遇到非法模型名时报告（打印错误）。 */
+  onInvalid: (value: string) => void;
+}
+
+export interface ResolvedModelName {
+  /** 合法的模型名；undefined 表示用户取消。 */
+  model?: string;
+  /** 该名字来自手动输入，需要写回 provider.models。 */
+  persistModels: boolean;
+}
+
+/**
+ * 把「要使用的模型名」解析成一个合法值：校验始终走 config.isValidModelName。
+ * 交互输入非法时打印错误并重新提示，直到合法或用户取消（空输入）。
+ */
+export async function resolveModelName(prompt: ModelNamePrompt): Promise<ResolvedModelName> {
+  const accept = (value: string, persistModels: boolean): ResolvedModelName => ({ model: value, persistModels });
+
+  if (prompt.preset) {
+    if (isValidModelName(prompt.preset)) return accept(prompt.preset, false);
+    prompt.onInvalid(prompt.preset);
+    return { persistModels: false };
+  }
+
+  if (prompt.models.length > 0) {
+    const selected = await prompt.selectFromList();
+    if (isValidModelName(selected)) return accept(selected, false);
+    prompt.onInvalid(selected);
+  }
+
+  for (;;) {
+    const entered = await prompt.promptManual();
+    if (!entered) return { persistModels: false };
+    if (!isValidModelName(entered)) {
+      prompt.onInvalid(entered);
+      continue;
+    }
+    return accept(entered, prompt.models.length === 0);
+  }
+}
+
 export async function useCommand(providerArg: string | undefined, opts: UseOptions): Promise<void> {
   let config = loadConfig();
   const providerName = providerArg ?? (await selectProvider(config));
   let provider = config.providers[providerName];
   if (!provider) {
     fail(`供应商 "${providerName}" 不存在`);
+    return;
+  }
+
+  // --model 预设先校验：非法则零副作用返回（不刷新、不写配置、不启动守护进程）
+  if (opts.model && !isValidModelName(opts.model)) {
+    fail(modelNameErrorMessage(opts.model));
     return;
   }
 
@@ -215,21 +278,21 @@ export async function useCommand(providerArg: string | undefined, opts: UseOptio
     return;
   }
 
-  let model = opts.model;
-  if (!model) {
-    const models = provider.models ?? [];
-    if (models.length === 0) {
-      hint("输入该供应商支持的模型 id，例如 deepseek-chat、gpt-4o-mini");
-      model = await promptInput("输入模型名");
-      if (model) setProviderModels(providerName, [model]);
-    } else {
-      model = await selectModel(provider, config.activeModel);
-    }
-  }
-  if (!model) {
+  const models = provider.models ?? [];
+  if (!opts.model && models.length === 0) hint("输入该供应商支持的模型 id，例如 deepseek-chat、gpt-4o-mini");
+  const resolved = await resolveModelName({
+    preset: opts.model,
+    models,
+    selectFromList: () => selectModel(provider, config.activeModel),
+    promptManual: () => promptInput("输入模型名"),
+    onInvalid: (value) => fail(modelNameErrorMessage(value)),
+  });
+  if (!resolved.model) {
     fail("未选择模型");
     return;
   }
+  const model = resolved.model;
+  if (resolved.persistModels) setProviderModels(providerName, [model]);
   if (provider.models && provider.models.length > 0 && !provider.models.includes(model)) {
     warn(`模型 "${model}" 不在 ${providerName} 的列表中，仍将使用`);
   }

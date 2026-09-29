@@ -124,7 +124,7 @@ JSONC 格式，支持 `//` 注释与尾逗号：
 - 手改配置后运行 `llmwarp reload`；或用 `llmwarp edit --file` 在 `$EDITOR` 中打开，保存后自动 reload。
 - `models` 可省略：此时 `llmwarp use`（或 `--refresh`）会请求 `<baseUrl>/models` 拉取模型列表。
 - `GET /v1/models` 本地返回 `warp` 与所有 `{provider}/{model}`（不含密钥）；`useClientModel` 两种取值下，客户端传的 `model` 都必须是这个列表里的名字。
-- 名字规则：供应商名不能含 `/`（第一个 `/` 是路由分隔符）、空白或控制字符，`llmwarp add` 会直接拒绝这类名字；模型名不能含空白或控制字符，否则不会出现在 `/v1/models` 里。
+- 名字规则：供应商名不能含 `/`（第一个 `/` 是路由分隔符）、空白或控制字符，`llmwarp add` 会直接拒绝这类名字；模型名不能含空白或控制字符，否则不会出现在 `/v1/models` 里。`llmwarp use`（含 `--model`）在写入 `activeModel` 前会校验同一规则，非法名字直接报错、不写配置。
 - 配置文件写入权限为 `0600`、配置目录为 `0700`；密钥建议用 `${ENV_VAR}` 而非明文。
 - 守护进程运行时状态在 `~/.config/llmwarp/daemon.json`（含本机管理接口 token），日志在 `~/.config/llmwarp/daemon.log`。
 

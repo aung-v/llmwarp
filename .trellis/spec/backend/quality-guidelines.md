@@ -24,6 +24,7 @@ Example coverage to preserve:
 - `buildUpstreamUrl` handles base URLs with and without `/v1`.
 - `rewriteModel` changes JSON bodies only when a target model exists.
 - `resolveModelRoute` accepts only `warp` and registered `{provider}/{model}` names; bare/whitespace names raise `unknown_model`, unknown providers raise `unknown_provider`, and `useClientModel: false` collapses to the active model.
+- `resolveModelName` rejects illegal model names on all `llmwarp use` entry paths before any config or daemon side effect, and re-prompts on invalid interactive input.
 - `buildModelCatalog` returns `warp` + every registered `{provider}/{model}`, deduped and in config order, with no secrets.
 - The proxy injects the provider key, rewrites the model, preserves SSE streaming, and protects admin endpoints with the daemon token.
 - SSE coverage must read chunks from `res.body.getReader()` and assert the later chunk arrives after the first one. `await res.text()` only proves the payload, not streaming, and must not be used for streaming tests.

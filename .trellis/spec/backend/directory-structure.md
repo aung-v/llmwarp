@@ -19,6 +19,7 @@ src/
 ├── server.ts       # HTTP server and admin/proxy route dispatch
 └── ui.ts           # Terminal output and prompt helpers
 test/
+├── commands.test.ts
 ├── config.test.ts
 ├── proxy.test.ts
 ├── routing.test.ts
