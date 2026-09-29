@@ -21,3 +21,5 @@
 ## Future Dashboard
 
 A persistent TUI may keep ephemeral view state such as selected pane, filter text, scroll offset, or last refresh time. It must not become the owner of provider configuration or daemon lifecycle. Treat the daemon admin API as the authoritative interface.
+
+An explicit TUI switch may persist the selection by calling `updateActive()` in `src/config.ts` and then syncing the daemon through the admin API. The config file remains the authoritative owner, so the TUI must not keep a cached copy of providers or the active selection.

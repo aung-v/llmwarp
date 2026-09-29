@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "'active"}
+{"file": ".trellis/spec/frontend/architecture.md", "reason": "'TUI"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "'复用"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "'typecheck/test/build"}

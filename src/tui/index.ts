@@ -1,5 +1,5 @@
 import readline from "node:readline";
-import { loadConfig } from "../config.js";
+import { loadConfig, updateActive } from "../config.js";
 import { adminRequest, daemonRunning } from "../daemon.js";
 import {
   beginConfirm,
@@ -30,6 +30,16 @@ async function readCatalog(status: StatusSnapshot | null): Promise<CatalogItem[]
   } catch {
     return [];
   }
+}
+
+/**
+ * 切换当前供应商/模型：先落盘再同步 daemon，顺序与 CLI `llmwarp use` 一致。
+ * 先写配置可保证 daemon 重启或 reload 后切换结果不丢失；daemon 未运行或
+ * 同步失败时保留已写入的配置，并把错误抛给调用方展示。
+ */
+export async function applyActiveSelection(provider: string, model: string): Promise<void> {
+  updateActive(provider, model);
+  await adminRequest("POST", "use", { provider, model });
 }
 
 export async function startTui(): Promise<void> {
@@ -106,7 +116,7 @@ export async function startTui(): Promise<void> {
     }
 
     try {
-      await adminRequest("POST", "use", { provider: entry.provider, model: entry.model });
+      await applyActiveSelection(entry.provider, entry.model);
       state = finishSwitch(state, null);
       await refresh(`已切换到 ${entry.label}`);
     } catch (err) {
