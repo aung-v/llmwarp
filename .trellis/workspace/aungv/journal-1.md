@@ -92,3 +92,25 @@ Closed the write side of the model-name rule: llmwarp use's three entry paths (-
 ### Status
 
 [OK] **Completed**
+
+
+## Session 4: Guard activeModel writes inside updateActive
+<!-- trellis-session: v=2 fp=e2a9679862404643 -->
+
+**Date**: 2026-09-30
+**Task**: Guard activeModel writes inside updateActive
+**Branch**: `master`
+
+### Summary
+
+Pushed the model-name rule down to the single writer: updateActive now validates a non-empty activeModel with isValidModelName before touching the file, keeping '' legal as unset, so llmwarp add and the TUI can no longer persist an illegal name that the warp alias would forward upstream. addCommand gained activateAddedModel, which warns and skips activation on rejection while keeping the provider saved; the TUI already surfaces the thrown message through its switch error path. Review added unit coverage for the TUI write path and for byte-identical config on rejection, and caught a README over-claim about provider.models which was scoped back to activeModel. Verified: typecheck, build, 63/63 tests.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `22a4d8c` | fix: guard activeModel writes inside updateActive |
+
+### Status
+
+[OK] **Completed**
