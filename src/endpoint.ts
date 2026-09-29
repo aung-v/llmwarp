@@ -10,7 +10,7 @@ export function accessLines(config: Config, port?: number): string[] {
   const lines = [
     `接入地址    ${endpointUrl(config, port)}`,
     `客户端 key  任意非空值（如 any）— llmwarp 忽略，使用供应商的 key`,
-    `客户端模型  任意非空值（如 gpt-4o）— llmwarp 改写成当前选择的模型`,
+    `客户端模型  warp，或 /v1/models 里的 {provider}/{model}`,
   ];
   lines.push(
     active

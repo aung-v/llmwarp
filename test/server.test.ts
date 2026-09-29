@@ -7,6 +7,7 @@ import http from "node:http";
 
 const home = mkdtempSync(join(tmpdir(), "llmwarp-home-"));
 process.env.HOME = home;
+process.env.XDG_CONFIG_HOME = home;
 process.env.MY_TEST_KEY = "upstream-secret";
 
 const { CONFIG_DIR, CONFIG_PATH } = await import("../src/config.js");
@@ -70,7 +71,7 @@ test("代理：改写 model、注入密钥、透传 SSE、管理端点鉴权", a
   const res = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: "Bearer client-key" },
-    body: JSON.stringify({ model: "gpt-placeholder", messages: [] }),
+    body: JSON.stringify({ model: "fake/real-model", messages: [] }),
   });
   assert.equal(res.status, 200);
   assert.deepEqual(await res.json(), { ok: true });
@@ -81,11 +82,27 @@ test("代理：改写 model、注入密钥、透传 SSE、管理端点鉴权", a
   const sse = await fetch(`http://127.0.0.1:${port}/v1/stream`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ model: "gpt-placeholder" }),
+    body: JSON.stringify({ model: "warp" }),
   });
-  const text = await sse.text();
-  assert.match(text, /data: a/);
-  assert.match(text, /data: b/);
+  assert.equal(sse.status, 200);
+  const reader = sse.body!.getReader();
+  const decoder = new TextDecoder();
+  let first = "";
+  while (!first.includes("data: a")) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    first += decoder.decode(value, { stream: true });
+  }
+  assert.match(first, /data: a/);
+  assert.doesNotMatch(first, /data: b/);
+  let rest = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    rest += decoder.decode(value, { stream: true });
+  }
+  assert.match(rest, /data: b/);
+  await reader.cancel();
 
   const unauthorized = await fetch(`http://127.0.0.1:${port}/_llmwarp/status`);
   assert.equal(unauthorized.status, 401);

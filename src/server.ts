@@ -10,7 +10,8 @@ import {
   CONFIG_PATH,
   type Config,
 } from "./config.js";
-import { buildUpstreamUrl, proxyRequest } from "./proxy.js";
+import { buildUpstreamUrl, proxyRequest, readRequestBody } from "./proxy.js";
+import { buildModelCatalog, resolveModelRoute, RoutingError } from "./routing.js";
 import { RequestMetrics } from "./metrics.js";
 import { accessLines } from "./endpoint.js";
 import { portInUseMessage, findPortOwner } from "./net.js";
@@ -25,14 +26,6 @@ class RouterState {
 
   reload(): void {
     this.config = loadConfig();
-  }
-
-  active(): { providerName: string; provider: Config["providers"][string]; model: string | undefined } {
-    const active = resolveActive(this.config);
-    if (!active) {
-      throw Object.assign(new Error("没有可用的供应商，请运行：llmwarp use"), { statusCode: 503 });
-    }
-    return active;
   }
 
   setActive(provider: string, model: string): void {
@@ -58,6 +51,21 @@ async function readJsonBody(req: http.IncomingMessage): Promise<Record<string, u
   } catch {
     return {};
   }
+}
+
+/** 从已读取的请求体里取出 JSON 的 model 字段；非 JSON 或非字符串时返回 undefined。 */
+function extractRequestedModel(body: Buffer): string | undefined {
+  if (body.length === 0) return undefined;
+  try {
+    const parsed = JSON.parse(body.toString("utf8"));
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const value = (parsed as Record<string, unknown>).model;
+      return typeof value === "string" ? value : undefined;
+    }
+  } catch {
+    // 非 JSON，交给路由兜底
+  }
+  return undefined;
 }
 
 async function handleAdmin(
@@ -141,28 +149,38 @@ async function handleProxy(
     if (!res.writableFinished) record(null);
   });
 
-  let active: ReturnType<RouterState["active"]>;
+  let body: Buffer;
   try {
-    active = router.active();
+    body = await readRequestBody(req);
   } catch (err) {
-    sendJson(res, (err as { statusCode?: number }).statusCode ?? 503, {
-      error: { message: (err as Error).message, type: "no_active_provider" },
-    });
+    sendJson(res, 400, { error: { message: (err as Error).message } });
+    return;
+  }
+
+  let route: ReturnType<typeof resolveModelRoute>;
+  try {
+    route = resolveModelRoute(router.config, extractRequestedModel(body));
+  } catch (err) {
+    if (err instanceof RoutingError) {
+      sendJson(res, err.statusCode, { error: { message: err.message, type: err.type } });
+    } else {
+      sendJson(res, 500, { error: { message: (err as Error).message } });
+    }
     return;
   }
 
   let apiKey: string;
   try {
-    apiKey = resolveApiKey(active.provider.apiKey);
+    apiKey = resolveApiKey(route.provider.apiKey);
   } catch (err) {
     sendJson(res, 500, { error: { message: (err as Error).message, type: "config_error" } });
     return;
   }
 
-  const upstreamUrl = buildUpstreamUrl(active.provider.baseUrl, url.pathname, url.search);
-  providerName = active.providerName;
-  model = active.model ?? null;
-  await proxyRequest(req, res, { upstreamUrl, apiKey, model: active.model });
+  const upstreamUrl = buildUpstreamUrl(route.provider.baseUrl, url.pathname, url.search);
+  providerName = route.providerName;
+  model = route.model ?? null;
+  await proxyRequest(req, res, { upstreamUrl, apiKey, model: route.model, body });
 }
 
 export interface StartServerOptions {
@@ -186,6 +204,8 @@ export async function startServer(options: StartServerOptions = {}): Promise<Ser
     const url = new URL(req.url ?? "/", "http://localhost");
     if (url.pathname.startsWith(ADMIN_PREFIX)) {
       void handleAdmin(req, res, router, token, startedAt);
+    } else if (req.method === "GET" && url.pathname === "/v1/models") {
+      sendJson(res, 200, buildModelCatalog(router.config));
     } else {
       void handleProxy(req, res, router).catch((err) => {
         if (!res.headersSent) sendJson(res, 500, { error: { message: (err as Error).message } });

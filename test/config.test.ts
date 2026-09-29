@@ -7,6 +7,8 @@ import {
   validateConfig,
   configWarnings,
   resolveActive,
+  isValidProviderName,
+  isValidModelName,
   type Config,
 } from "../src/config.js";
 
@@ -69,4 +71,49 @@ test("resolveActive 回退到第一个供应商/模型", () => {
   const active = resolveActive(config);
   assert.equal(active?.providerName, "first");
   assert.equal(active?.model, "m1");
+});
+
+test("configWarnings 报告不合法（含 / 或空白）的供应商名与模型名", () => {
+  const bad: Config = {
+    providers: {
+      "bad/name": { baseUrl: "http://x/v1", apiKey: "k", models: ["ok"] },
+      "bad name": { baseUrl: "http://y/v1", apiKey: "k", models: ["has space", "fine"] },
+    },
+  };
+  assert.doesNotThrow(() => validateConfig(bad));
+  const warnings = configWarnings(bad).join("\n");
+  assert.match(warnings, /bad\/name/);
+  assert.match(warnings, /bad name/);
+  assert.match(warnings, /has space/);
+  assert.doesNotMatch(warnings, /"ok"/);
+  assert.doesNotMatch(warnings, /"fine"/);
+});
+
+test("configWarnings 对干净配置不产生额外警告", () => {
+  const clean: Config = {
+    activeProvider: "a",
+    activeModel: "m",
+    providers: {
+      a: { baseUrl: "http://x/v1", apiKey: "k", models: ["m", "meta/llama-3", "my.model.v1:x"] },
+    },
+  };
+  assert.deepEqual(configWarnings(clean), []);
+});
+
+test("isValidProviderName 拒绝空、/、空白与控制字符，接受 Unicode 与标点", () => {
+  for (const bad of ["", "a/b", "a b", "a\tb", "a\nb", " a", "a ", "\u0000", "a\u007fb"]) {
+    assert.equal(isValidProviderName(bad), false, `应拒绝 ${JSON.stringify(bad)}`);
+  }
+  for (const good of ["deepseek", "供应商", "my.provider-1_x:y"]) {
+    assert.equal(isValidProviderName(good), true, `应接受 ${JSON.stringify(good)}`);
+  }
+});
+
+test("isValidModelName 拒绝空、空白与控制字符，允许 / 与 Unicode", () => {
+  for (const bad of ["", " ", "a b", "a\tb", "a\nb", "\u0000", "a\u007fb"]) {
+    assert.equal(isValidModelName(bad), false, `应拒绝 ${JSON.stringify(bad)}`);
+  }
+  for (const good of ["deepseek-chat", "meta/llama-3", "my.model.v1:x", "模型·测试"]) {
+    assert.equal(isValidModelName(good), true, `应接受 ${JSON.stringify(good)}`);
+  }
 });

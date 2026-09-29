@@ -70,6 +70,7 @@ export interface ProxyOptions {
   upstreamUrl: string;
   apiKey: string;
   model: string | undefined;
+  body?: Buffer;
 }
 
 /** 透明转发：改写 model、注入密钥、SSE 边收边发。 */
@@ -78,7 +79,7 @@ export async function proxyRequest(
   res: ServerResponse,
   options: ProxyOptions,
 ): Promise<void> {
-  const body = await readRequestBody(req);
+  const body = options.body ?? (await readRequestBody(req));
   const effectiveBody = rewriteModel(body, options.model);
   const headers = filterRequestHeaders(req.headers, options.apiKey);
   const hasBodyMethod = req.method !== "GET" && req.method !== "HEAD" && req.method !== "OPTIONS";

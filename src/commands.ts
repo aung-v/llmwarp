@@ -5,6 +5,7 @@ import {
   configExists,
   ensureConfigDir,
   getPort,
+  isValidProviderName,
   loadConfig,
   removeProvider,
   resolveActive,
@@ -131,6 +132,10 @@ export async function addCommand(): Promise<void> {
 
   hint("名称只是给这家供应商起的标识，后面用 llmwarp use 选择它");
   const name = await promptInput("供应商名称", hostToName(baseUrl));
+  if (!isValidProviderName(name)) {
+    fail(`供应商名称 "${name}" 不合法：不能包含 /、空白或控制字符`);
+    return;
+  }
 
   hint("到该服务商控制台创建 API Key 后粘贴（输入会显示为 *）；也可填 ${ENV_VAR} 引用环境变量");
   const apiKeyRaw = (await promptApiKey("② 输入 apiKey")).trim();
@@ -169,7 +174,7 @@ export async function addCommand(): Promise<void> {
   try {
     await applyActive(name, model);
     ok(`已切换到 ${bold(name)}${model ? ` / ${bold(model)}` : ""}`);
-    info(dim(`客户端接入地址 ${endpointUrl(loadConfig())}（key/模型随便填）`));
+    info(dim(`客户端接入地址 ${endpointUrl(loadConfig())}（key 随便填，模型用 warp 或 /v1/models 里的名字）`));
   } catch (err) {
     warn(`已写入配置，但守护进程未启动：${(err as Error).message}`);
   }
@@ -233,7 +238,9 @@ export async function useCommand(providerArg: string | undefined, opts: UseOptio
   try {
     await applyActive(providerName, model);
     ok(`已切换到 ${bold(providerName)} / ${bold(model)}`);
-    info(dim(`客户端接入地址 ${endpointUrl(config)}（key/模型随便填），详细：llmwarp status`));
+    info(
+      dim(`客户端接入地址 ${endpointUrl(config)}（key 随便填，模型用 warp 或 /v1/models 里的名字），详细：llmwarp status`),
+    );
   } catch (err) {
     fail(`切换失败：${(err as Error).message}`);
   }

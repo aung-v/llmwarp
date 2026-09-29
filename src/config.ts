@@ -19,7 +19,24 @@ export interface Config {
   port?: number;
   activeProvider?: string;
   activeModel?: string;
+  useClientModel?: boolean;
   providers: Record<string, Provider>;
+}
+
+const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
+const WHITESPACE = /\s/;
+
+/**
+ * 供应商名：非空、不含 `/`（那是路由分隔符）、不含任何空白或控制字符。
+ * 供模型目录、`{provider}/{model}` 解析和 `llmwarp add` 共用。
+ */
+export function isValidProviderName(name: string): boolean {
+  return name.length > 0 && !name.includes("/") && !WHITESPACE.test(name) && !CONTROL_CHARS.test(name);
+}
+
+/** 模型名：非空、不含任何空白或控制字符；`/`、点、冒号、Unicode 均允许。 */
+export function isValidModelName(name: string): boolean {
+  return name.length > 0 && !WHITESPACE.test(name) && !CONTROL_CHARS.test(name);
 }
 
 export interface DaemonInfo {
@@ -122,6 +139,7 @@ function normalizeConfig(raw: unknown): Config {
     port: typeof obj.port === "number" ? obj.port : undefined,
     activeProvider: typeof obj.activeProvider === "string" && obj.activeProvider ? obj.activeProvider : undefined,
     activeModel: typeof obj.activeModel === "string" && obj.activeModel ? obj.activeModel : undefined,
+    useClientModel: typeof obj.useClientModel === "boolean" ? obj.useClientModel : true,
     providers,
   };
 }
@@ -155,6 +173,16 @@ export function configWarnings(config: Config): string[] {
     !provider.models.includes(config.activeModel)
   ) {
     warnings.push(`activeModel "${config.activeModel}" 不在供应商 "${config.activeProvider}" 的 models 里（仍会按它转发，可用 llmwarp use 重选）`);
+  }
+  for (const [name, p] of Object.entries(config.providers)) {
+    if (!isValidProviderName(name)) {
+      warnings.push(`供应商名 "${name}" 不合法（不能包含 /、空白或控制字符）：不会出现在 /v1/models，也无法作为 {provider}/{model} 访问`);
+    }
+    for (const model of p.models ?? []) {
+      if (!isValidModelName(model)) {
+        warnings.push(`供应商 "${name}" 的模型名 ${JSON.stringify(model)} 不合法（不能包含空白或控制字符）：不会出现在 /v1/models`);
+      }
+    }
   }
   return warnings;
 }

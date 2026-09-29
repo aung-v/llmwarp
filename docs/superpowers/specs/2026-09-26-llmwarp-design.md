@@ -10,7 +10,7 @@
 
 llmwarp 是一个**纯本地的 OpenAI 协议路由器 + 切换 CLI**。
 
-它在本机起一个 OpenAI 兼容的 HTTP 端点。Codex（或任何 OpenAI 兼容客户端）指向它；llmwarp 把请求转发给当前选中的供应商，并把客户端发来的固定模型名改写成你在该供应商下选中的真实模型名。你用一个交互式 CLI 随时切换“用哪家、用哪个模型”。
+它在本机起一个 OpenAI 兼容的 HTTP 端点。Codex（或任何 OpenAI 兼容客户端）指向它，用 `GET /v1/models` 选模型：填 `warp` 用你当前选中的模型，填 `{provider}/{model}` 用指定供应商的那个模型，llmwarp 转发时去掉供应商前缀。你用一个交互式 CLI 随时切换“用哪家、用哪个模型”。
 
 核心价值：**只改一次客户端配置，之后靠 CLI 一键切换供应商/模型。**
 
@@ -72,7 +72,14 @@ llmwarp 是一个**纯本地的 OpenAI 协议路由器 + 切换 CLI**。
   - **模型发现 URL** = `joinUrl(baseUrl, "models")`（同样不写死 `/v1/models`）。
   - 保留查询字符串。
   - 复制入站请求头，剔除逐跳头（`host`、`connection`、`keep-alive`、`transfer-encoding`、`content-length`、`authorization`），再注入 `Authorization: Bearer <provider.apiKey>`。
-  - **模型改写**：若请求体是 JSON 且含 `model` 字段，则将其改写为当前 `activeModel`。无法解析的请求体原样透传。
+  - **模型路由与改写**：若请求体是 JSON 且含 `model` 字段，按名字本地解析后再转发：
+    - `warp` → 当前 `activeProvider` / `activeModel`；上游 `model` 改写成 `activeModel`。
+    - `{provider}/{model}` → 该供应商；上游 `model` 改写成去掉第一个 `/` 前缀后的模型名（例如 `openrouter/meta/llama-3` → `meta/llama-3`）。
+    - 名字必须是 `/v1/models` 列出的值；裸模型名（如 `gpt-4o`）和其他列表外的名字一律本地返回 `400` JSON 错误，不向上游发起请求。
+    - `model` 缺失或为空 → 兜底当作 `warp`（兼容用法，非推荐写法）。
+    - 顶层开关 `useClientModel`：`true`（默认）按上面的规则尊重客户端名字；`false` 时校验照旧、但忽略具体名字，统一落到当前 `activeProvider` / `activeModel`。
+    - 解析/校验始终发生在 `useClientModel` 分支之前，所以两种取值下列表外的名字都会报错。
+    - 无法解析的请求体原样透传。
   - 响应原样回传（状态码、响应头、响应体）。`text/event-stream` 等流式响应**边收边发，不缓冲**。
 - 每次请求在开始时快照当前 `activeProvider` / `activeModel`，切换不影响进行中的请求。
 
@@ -120,6 +127,11 @@ llmwarp 是一个**纯本地的 OpenAI 协议路由器 + 切换 CLI**。
   "activeProvider": "deepseek",
   "activeModel": "deepseek-chat",
 
+  // 客户端指定的模型是否生效：
+  //   true  尊重客户端：warp = 当前选择，{provider}/{model} = 指定供应商的模型
+  //   false 统一路由：客户端不管写哪个已注册名字，都落到上面的 activeProvider/activeModel
+  "useClientModel": true,
+
   // 供应商列表，键名即供应商名
   "providers": {
     "deepseek": {
@@ -146,6 +158,7 @@ llmwarp 是一个**纯本地的 OpenAI 协议路由器 + 切换 CLI**。
 | `port` | number | 否 | 默认 `8787` |
 | `activeProvider` | string | 否 | 当前供应商名；空则取 `providers` 第一个 |
 | `activeModel` | string | 否 | 当前模型；空则取该供应商 `models` 第一个；若 `models` 也为空则触发 `use` 时发现 |
+| `useClientModel` | boolean | 否 | 默认 `true`：尊重客户端指定的模型；`false` 时统一落到 `activeProvider`/`activeModel`。两种取值下名字都必须是 `/v1/models` 列出的值 |
 | `providers` | object | 是 | 供应商映射，键为供应商名 |
 | `providers.<name>.baseUrl` | string | 是 | API 版本根地址 |
 | `providers.<name>.apiKey` | string | 是 | 支持 `${ENV}` 插值 |
@@ -158,6 +171,8 @@ llmwarp 是一个**纯本地的 OpenAI 协议路由器 + 切换 CLI**。
   - `activeProvider` 不存在 → 回退到第一个供应商。
   - `activeModel` 不在 `models` 里 → 仍按它转发，仅提示；`llmwarp status` 会显示警告。
 - `${ENV}` 未定义 → 报错并指出缺失的环境变量名（不打印密钥值）。
+- 供应商名不能包含 `/`（第一个 `/` 是路由分隔符）、空白或控制字符。`llmwarp add` 会在写入前直接拒绝这类名字；已有配置里出现只作警告，该供应商仍可被 `warp`/active 使用，但无法通过 `{provider}/{model}` 寻址。
+- 模型名不能包含空白或控制字符，且必须非空。这类名字不会出现在 `/v1/models` 里，也无法被路由命中（只作警告）。
 - 使用 `jsonc-parser` 的**范围编辑**能力写回，尽量保留用户手写注释与格式。
 
 ---
@@ -166,7 +181,9 @@ llmwarp 是一个**纯本地的 OpenAI 协议路由器 + 切换 CLI**。
 
 - **模型不写死在单一字段**：一个供应商可配置/发现多个模型（`models` 数组）。
 - 切换时选择具体模型，结果存入 `activeModel`。
-- 请求转发时，把客户端发来的任意 `model` 改写为 `activeModel`。
+- 请求转发时按客户端 `model` 路由：`warp` → 当前 active；`{provider}/{model}` → 指定供应商（上游 `model` 去掉供应商前缀）；列表外的名字一律本地报错、不转发。
+- 顶层开关 `useClientModel`（默认 `true`）决定“客户端指定的模型算不算数”；`false` 时统一落到当前 active。
+- 本地模型目录 `GET /v1/models` 返回 `warp` + 每个已注册的 `{provider}/{model}`，不泄露 apiKey/baseUrl。
 - 模型列表来源：
   1. 配置里已写的 `models`（权威、可离线）。
   2. 列表为空或需要刷新时，查询 `<baseUrl>/models`（OpenAI 兼容：`{ data: [{ id }] }`）填充。
@@ -213,7 +230,7 @@ llmwarp 是通用 OpenAI 协议路由，不绑定任何特定客户端。任何�
 
 - 接入地址：`http://127.0.0.1:<port>/v1`
 - API key：任意值（llmwarp 忽略客户端密钥，使用供应商自己的 key）
-- 模型名：任意占位名，真实模型由 llmwarp 按 active 改写
+- 模型名：`warp`（用当前选择的模型），或 `GET /v1/models` 列出的 `{provider}/{model}`
 
 `llmwarp status`、守护进程启动、以及 `use` 切换成功后都会打印当前接入地址。Codex、Cursor、Continue、各类 SDK 等只是接入方举例，接入方式由各自文档决定，llmwarp 不内置任何客户端专属命令。
 
@@ -278,6 +295,8 @@ docs/superpowers/specs/2026-09-26-llmwarp-design.md
 | 配置缺失/非法 | CLI 拒绝对应操作并给出明确修正提示 |
 | `${ENV}` 未定义 | 报错并指出变量名 |
 | 无 active 或 active 无效 | 请求返回 `503` 并提示运行 `llmwarp use` |
+| 请求的 `model` 是列表外的名字（含裸模型名） | 返回 `400`，`type` 为 `unknown_model`，不转发上游 |
+| 请求的 `model` 里供应商不存在 | 返回 `400`，`type` 为 `unknown_provider`，不转发上游 |
 | 管理端点 token 错误 | `401` |
 | 启动时端口被占用 | 立即报出端口号，并给出可执行方案：查占用者（`ss`/`lsof`）、结束该进程、或改配置里的 `port`；不空等超时 |
 
@@ -303,7 +322,7 @@ docs/superpowers/specs/2026-09-26-llmwarp-design.md
 1. 语言：Node.js + TypeScript。
 2. 切换架构：常驻守护进程 + 本地管理端点（内存状态，零每请求 IO）。
 3. 上游：仅 OpenAI 兼容，透明转发。
-4. 模型：供应商可持有 `models` 列表（多个，**可选**，省略则切换时查询发现）；`activeProvider`/`activeModel` 指定当前选择；转发时改写请求 `model`。
+4. 模型：供应商可持有 `models` 列表（多个，**可选**，省略则切换时查询发现）；`activeProvider`/`activeModel` 指定当前选择；转发时按客户端 `model`（`warp` 或 `{provider}/{model}`）路由并改写上游 `model`，列表外的名字本地报错。
 5. 交互：全程向导与方向键，减少手输。
 6. 无 Web UI，无自定义请求头。
 7. 配置为 JSONC，支持注释与直接手改，`reload` 生效。

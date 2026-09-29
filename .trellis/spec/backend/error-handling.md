@@ -20,7 +20,8 @@ throw new Error(`配置文件不存在：${CONFIG_PATH}\n先运行：llmwarp ini
 ## HTTP Errors
 
 - Proxy and admin APIs return JSON shaped as `{ error: { message } }`.
-- Add a stable `type` for semantic proxy failures, such as `no_active_provider`, `config_error`, and `upstream_error`.
+- Add a stable `type` for semantic proxy failures: `unknown_provider`, `unknown_model`, `no_active_provider`, `config_error`, and `upstream_error`. Routing errors are raised locally by `src/routing.ts` (see `model-routing.md`) and must never reach the upstream.
+- Map `RoutingError.statusCode` directly: `400` for `unknown_provider`/`unknown_model`, `503` for `no_active_provider`.
 - Check whether headers were already sent before writing an error response:
 
 ```ts

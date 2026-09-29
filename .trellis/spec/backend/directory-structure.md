@@ -14,12 +14,15 @@ src/
 ├── health.ts       # Provider reachability/auth checks
 ├── net.ts          # Port ownership and address helpers
 ├── proxy.ts        # Request forwarding, header/model rewriting, SSE streaming
+├── routing.ts      # Local model catalog (GET /v1/models) and model-name -> route resolution
 ├── searchCheckbox.ts
 ├── server.ts       # HTTP server and admin/proxy route dispatch
 └── ui.ts           # Terminal output and prompt helpers
 test/
 ├── config.test.ts
 ├── proxy.test.ts
+├── routing.test.ts
+├── server-routing.test.ts
 └── server.test.ts
 ```
 

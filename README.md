@@ -10,8 +10,8 @@
 ## 它解决什么问题
 
 - 客户端（Codex、各类 OpenAI SDK、编辑器插件……）的 base URL 与模型名通常写死在配置里，换供应商就得改一次。
-- llmwarp 在本机起一个 OpenAI 兼容端点，把客户端发来的 `model` 改写成你当前选中的真实模型，并用你为该供应商配置的 key 转发。
-- 于是客户端的 `baseUrl` 固定为本机、`apiKey` 与 `model` 随便填；切换只发生在 llmwarp 侧，**客户端无需重启**。
+- llmwarp 在本机起一个 OpenAI 兼容端点，把客户端发来的 `model` 路由到对应供应商：填 `warp` 用你当前选中的模型，填 `{provider}/{model}` 用指定的模型，并用你为该供应商配置的 key 转发。
+- 于是客户端的 `baseUrl` 固定为本机、`apiKey` 随便填、`model` 从 `GET /v1/models` 里挑；切换只发生在 llmwarp 侧，**客户端无需重启**。
 
 ## 工作原理
 
@@ -26,7 +26,7 @@ OpenAI 兼容客户端 ──▶ 127.0.0.1:<port>/v1 ──▶ llmwarp 守护进
 - 仅监听 `127.0.0.1`，不对外暴露。
 - 监听端口取自配置的 `port`，未配置时默认 `8787`；以 `llmwarp status` 显示的接入地址为准。
 - 上游 URL = `joinUrl(baseUrl, 客户端路径去掉 /v1 前缀)`。例：`baseUrl = https://api.deepseek.com/v1`，请求 `/v1/chat/completions` → `https://api.deepseek.com/v1/chat/completions`；`baseUrl` 不要求以 `/v1` 结尾。
-- JSON 请求体里的 `model` 被改写为当前激活模型；响应（含 SSE）边收边发，不缓冲。
+- JSON 请求体里的 `model` 决定路由：`warp`（或缺失）用当前激活模型，`{provider}/{model}` 用指定供应商的模型（只按第一个 `/` 拆分），上游收到的 `model` 会去掉供应商前缀。名字必须是 `GET /v1/models` 列出的值，否则返回本地 JSON 错误、不转发上游；响应（含 SSE）边收边发，不缓冲。
 - 请求开始时快照当前供应商/模型，切换不影响进行中的请求。
 
 ## 安装
@@ -60,13 +60,13 @@ llmwarp status    # 查看当前状态
 | --- | --- |
 | Base URL | `http://127.0.0.1:<port>/v1`，默认 `8787`；准确值看 `llmwarp status` 的「接入地址」 |
 | API Key | 任意非空值（如 `any`）—— llmwarp 忽略它，改用供应商的 key |
-| Model | 任意非空值（如 `gpt-4o`）—— llmwarp 会改写成你选中的模型 |
+| Model | `warp`（用当前选择），或 `/v1/models` 里的 `{provider}/{model}` |
 
 ```bash
 # 端口默认 8787；换成本机 `llmwarp status` 输出的「接入地址」
 curl http://127.0.0.1:8787/v1/chat/completions \
   -H 'content-type: application/json' \
-  -d '{"model":"whatever","messages":[{"role":"user","content":"hi"}]}'
+  -d '{"model":"warp","messages":[{"role":"user","content":"hi"}]}'
 ```
 
 端口不是写死的：以配置文件里的 `"port"` 为准（未配置时用默认值 `8787`）；也可以用
@@ -110,6 +110,7 @@ JSONC 格式，支持 `//` 注释与尾逗号：
   "port": 8787,                      // 监听端口，可改；不写则用默认 8787
   "activeProvider": "deepseek",      // 由 llmwarp use 维护
   "activeModel": "deepseek-chat",
+  "useClientModel": true,            // true 尊重客户端指定的模型；false 统一落到当前激活模型
   "providers": {
     "deepseek": {
       "baseUrl": "https://api.deepseek.com/v1",
@@ -122,6 +123,8 @@ JSONC 格式，支持 `//` 注释与尾逗号：
 
 - 手改配置后运行 `llmwarp reload`；或用 `llmwarp edit --file` 在 `$EDITOR` 中打开，保存后自动 reload。
 - `models` 可省略：此时 `llmwarp use`（或 `--refresh`）会请求 `<baseUrl>/models` 拉取模型列表。
+- `GET /v1/models` 本地返回 `warp` 与所有 `{provider}/{model}`（不含密钥）；`useClientModel` 两种取值下，客户端传的 `model` 都必须是这个列表里的名字。
+- 名字规则：供应商名不能含 `/`（第一个 `/` 是路由分隔符）、空白或控制字符，`llmwarp add` 会直接拒绝这类名字；模型名不能含空白或控制字符，否则不会出现在 `/v1/models` 里。
 - 配置文件写入权限为 `0600`、配置目录为 `0700`；密钥建议用 `${ENV_VAR}` 而非明文。
 - 守护进程运行时状态在 `~/.config/llmwarp/daemon.json`（含本机管理接口 token），日志在 `~/.config/llmwarp/daemon.log`。
 

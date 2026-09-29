@@ -15,7 +15,7 @@ npm test
 
 - Tests use Node's built-in `node:test` runner with `node:assert/strict`, executed through `tsx`.
 - Put pure logic tests in focused files matching the module: `test/config.test.ts` and `test/proxy.test.ts` are the pattern.
-- Test configuration normalization and validation, URL rewriting, model rewriting, and HTTP behavior.
+- Test configuration normalization and validation, URL rewriting, model routing/catalog behavior, and HTTP behavior.
 - For HTTP integration tests, bind ephemeral upstream and router ports, write configuration into a temporary `HOME`, and clean up with `t.after`.
 - Keep tests deterministic; do not depend on real provider APIs or network access.
 
@@ -23,7 +23,10 @@ Example coverage to preserve:
 
 - `buildUpstreamUrl` handles base URLs with and without `/v1`.
 - `rewriteModel` changes JSON bodies only when a target model exists.
+- `resolveModelRoute` accepts only `warp` and registered `{provider}/{model}` names; bare/whitespace names raise `unknown_model`, unknown providers raise `unknown_provider`, and `useClientModel: false` collapses to the active model.
+- `buildModelCatalog` returns `warp` + every registered `{provider}/{model}`, deduped and in config order, with no secrets.
 - The proxy injects the provider key, rewrites the model, preserves SSE streaming, and protects admin endpoints with the daemon token.
+- SSE coverage must read chunks from `res.body.getReader()` and assert the later chunk arrives after the first one. `await res.text()` only proves the payload, not streaming, and must not be used for streaming tests.
 
 ## TypeScript
 
