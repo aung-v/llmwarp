@@ -8,8 +8,10 @@ const home = mkdtempSync(join(tmpdir(), "llmwarp-commands-"));
 process.env.HOME = home;
 process.env.XDG_CONFIG_HOME = home;
 
-const { CONFIG_DIR, CONFIG_PATH, DAEMON_PATH } = await import("../src/config.js");
-const { resolveModelName, useCommand } = await import("../src/commands.js");
+const { CONFIG_DIR, CONFIG_PATH, DAEMON_PATH, loadConfig, updateActive, upsertProvider } = await import(
+  "../src/config.js"
+);
+const { resolveModelName, useCommand, activateAddedModel } = await import("../src/commands.js");
 
 const VALID_NAMES = ["meta/llama-3", "my.model.v1:x", "模型·测试", "deepseek-chat"];
 
@@ -154,4 +156,86 @@ test("useCommand --model 非法且 models 为空：不刷新列表、不写 prov
   assert.deepEqual(saved.providers.p.models, []);
   assert.equal(saved.activeModel, "good-model");
   assert.equal(existsSync(DAEMON_PATH), false);
+});
+
+/** 写入一份带注释/格式的配置，用于断言非法输入不会改动文件。 */
+function seedConfig(): string {
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  const text = `{
+  // 保留注释与格式
+  "activeProvider": "p",
+  "activeModel": "good-model",
+  "providers": {
+    "p": { "baseUrl": "http://127.0.0.1:1/v1", "apiKey": "k", "models": ["good-model"] }
+  }
+}
+`;
+  writeFileSync(CONFIG_PATH, text, "utf8");
+  return text;
+}
+
+test("updateActive 非法模型名：写盘前抛错且配置文件字节不变", () => {
+  const original = seedConfig();
+  let err: Error | undefined;
+  try {
+    updateActive("p", "a b");
+  } catch (e) {
+    err = e as Error;
+  }
+  assert.ok(err, "非法模型名应当抛错");
+  assert.match(err.message, /a b/);
+  assert.match(err.message, /空白或控制字符/);
+  assert.equal(readFileSync(CONFIG_PATH, "utf8"), original);
+});
+
+test("updateActive 写入合法模型名（含 / . : 与 Unicode），空串仍表示未激活", () => {
+  for (const name of VALID_NAMES) {
+    seedConfig();
+    updateActive("q", name);
+    const saved = loadConfig();
+    assert.equal(saved.activeProvider, "q");
+    assert.equal(saved.activeModel, name);
+  }
+
+  seedConfig();
+  updateActive("", "");
+  const cleared = loadConfig();
+  assert.equal(cleared.activeProvider, undefined);
+  assert.equal(cleared.activeModel, undefined);
+});
+
+test("activateAddedModel 首个模型非法：警告、供应商已保存、不写 activeModel、不抛错", () => {
+  seedConfig();
+  upsertProvider("q", { baseUrl: "http://127.0.0.1:1/v1", apiKey: "k", models: ["a b"] });
+
+  const logs: string[] = [];
+  const realLog = console.log;
+  console.log = (...args: unknown[]) => {
+    logs.push(args.map((a) => String(a)).join(" "));
+  };
+  let result: boolean | undefined;
+  try {
+    result = activateAddedModel("q", ["a b"]);
+  } finally {
+    console.log = realLog;
+  }
+
+  assert.equal(result, false);
+  assert.ok(
+    logs.some((line) => line.includes("a b")),
+    `应当输出包含非法值的警告：${logs.join("\n")}`,
+  );
+  const saved = loadConfig();
+  assert.deepEqual(saved.providers.q.models, ["a b"]);
+  assert.equal(saved.activeProvider, "p");
+  assert.equal(saved.activeModel, "good-model");
+});
+
+test("activateAddedModel 合法模型：返回 true 并写入 active", () => {
+  seedConfig();
+  upsertProvider("q", { baseUrl: "http://127.0.0.1:1/v1", apiKey: "k", models: ["meta/llama-3"] });
+  assert.equal(activateAddedModel("q", ["meta/llama-3"]), true);
+  const saved = loadConfig();
+  assert.equal(saved.activeProvider, "q");
+  assert.equal(saved.activeModel, "meta/llama-3");
 });

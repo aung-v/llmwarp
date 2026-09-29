@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/model-routing.md", "reason": "核对写入守卫与文档中的模型名契约一致。"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "核对非法输入不会留下半写入状态。"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "核对测试覆盖与 typecheck 结果。"}

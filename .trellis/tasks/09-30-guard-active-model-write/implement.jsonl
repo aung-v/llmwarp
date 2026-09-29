@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/model-routing.md", "reason": "模型名契约与 isValidModelName 的定义，以及写入端校验的既有约定。"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "CLI 与配置写入的失败路径要求可执行提示且无副作用。"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试与 typecheck 要求，以及断言点。"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "改动落在 src/config.ts、src/commands.ts 与测试文件。"}

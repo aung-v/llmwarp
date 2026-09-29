@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import http from "node:http";
@@ -8,7 +8,9 @@ import http from "node:http";
 const home = mkdtempSync(join(tmpdir(), "llmwarp-tui-persist-"));
 process.env.HOME = home;
 
-const { CONFIG_DIR, CONFIG_PATH, clearDaemonInfo, loadConfig } = await import("../src/config.js");
+const { CONFIG_DIR, CONFIG_PATH, DAEMON_PATH, clearDaemonInfo, loadConfig } = await import(
+  "../src/config.js",
+);
 const { adminRequest } = await import("../src/daemon.js");
 const { startServer } = await import("../src/server.js");
 const { applyActiveSelection } = await import("../src/tui/index.js");
@@ -46,6 +48,18 @@ test("daemon 未运行时切换仍然落盘", async () => {
   const saved = loadConfig();
   assert.equal(saved.activeProvider, "deepseek");
   assert.equal(saved.activeModel, "deepseek-chat");
+});
+
+test("applyActiveSelection 非法模型名：抛错且配置文件字节不变、不启动 daemon", async () => {
+  clearDaemonInfo();
+  writeConfig(8787, "ark", "glm");
+  const before = readFileSync(CONFIG_PATH, "utf8");
+
+  for (const illegal of ["a b", "bad\u0001name"]) {
+    await assert.rejects(() => applyActiveSelection("ark", illegal), /不合法/);
+    assert.equal(readFileSync(CONFIG_PATH, "utf8"), before);
+    assert.equal(existsSync(DAEMON_PATH), false);
+  }
 });
 
 test("切换后配置文件与 daemon 状态一致", async () => {

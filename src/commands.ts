@@ -107,6 +107,22 @@ const PRESETS: { name: string; value: string; description: string }[] = [
   },
 ];
 
+/**
+ * 把 `llmwarp add` 选出的首个模型写为 active。
+ * 模型名非法时 updateActive 会抛错：这里捕获、打印警告、跳过激活并返回 false，
+ * 供应商本身仍已通过 upsertProvider 保存，异常不会冒到顶层。
+ */
+export function activateAddedModel(providerName: string, models: string[]): boolean {
+  try {
+    updateActive(providerName, models[0] ?? "");
+    return true;
+  } catch (err) {
+    warn((err as Error).message);
+    warn(`供应商 "${providerName}" 已保存，但未激活：请运行 llmwarp use ${providerName} 重新选择模型`);
+    return false;
+  }
+}
+
 export async function addCommand(): Promise<void> {
   ensureConfigDir();
   if (!configExists()) {
@@ -170,8 +186,8 @@ export async function addCommand(): Promise<void> {
 
   const makeActive = await promptConfirm("立即设为当前使用？", true);
   if (!makeActive) return;
+  if (!activateAddedModel(name, models)) return;
   const model = models[0] ?? "";
-  updateActive(name, model);
   try {
     await applyActive(name, model);
     ok(`已切换到 ${bold(name)}${model ? ` / ${bold(model)}` : ""}`);

@@ -193,7 +193,7 @@ llmwarp 是一个**纯本地的 OpenAI 协议路由器 + 切换 CLI**。
   2. 选择模型（方向键；列表来自 `provider.models`）。
   3. 写入 `activeProvider`/`activeModel` 并调用管理端点即时生效。
 - 支持非交互：`llmwarp use <provider> --model <model>`；`llmwarp use <provider> --list` 打印该供应商模型列表。
-- 模型名校验：`use` 的三条入口（`--model`、models 为空时的手动输入、选择列表里的手动输入）在写入 `activeModel` 之前统一按模型名规则校验（非空、不含空白或控制字符）。`--model` 非法时直接报错并零副作用返回（不刷新列表、不写配置、不启动守护进程）；交互输入非法时提示错误并重新要求输入。列表外的合法名字仍按既有行为使用并给出警告。
+- 模型名校验：写入 `activeModel` 的唯一入口是 `updateActive()`，它在写盘前按模型名规则（非空、不含空白或控制字符）校验，非法即抛错且配置文件保持不变；空串仍表示“未激活”。调用方各自处理：`use` 的三条入口（`--model`、models 为空时的手动输入、选择列表里的手动输入）会提示重输；`--model` 非法时直接报错并零副作用返回（不刷新列表、不写配置、不启动守护进程）；`add` 遇到非法首个模型时只警告并跳过激活（供应商仍已保存）；TUI 通过既有的切换错误通道展示消息。列表外的合法名字仍按既有行为使用并给出警告。
 - 支持刷新：`llmwarp use <provider> --refresh` 重新查询 `<baseUrl>/models` 并更新配置中的 `models`。
 
 ---

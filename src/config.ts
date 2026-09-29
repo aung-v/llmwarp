@@ -256,6 +256,10 @@ export function clearDaemonInfo(): void {
 }
 
 export function updateActive(provider: string, model: string): void {
+  // 唯一写入点：非空模型名必须合法，非法时在写盘前抛错，配置文件保持原样。
+  if (model && !isValidModelName(model)) {
+    throw new Error(`模型名 ${JSON.stringify(model)} 不合法：模型名不能包含空白或控制字符`);
+  }
   let text = readConfigText();
   text = applyEdits(text, modify(text, ["activeProvider"], provider, { formattingOptions: FORMAT }));
   text = applyEdits(text, modify(text, ["activeModel"], model, { formattingOptions: FORMAT }));
