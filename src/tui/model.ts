@@ -1,4 +1,4 @@
-import type { Config } from "../config.js";
+import { isValidModelName, type Config } from "../config.js";
 
 export interface StatusSnapshot {
   active: { provider: string; model: string | null } | null;
@@ -38,20 +38,25 @@ export interface CatalogItem {
   legacy?: boolean;
 }
 
+/** 确认态意图：切换模型 / 切换模型路由（后续任务会复用 restart）。 */
+export type ConfirmIntent = "switch" | "routing";
+
 export interface TuiState {
   entries: CatalogItem[];
   selected: number;
-  confirming: boolean;
+  confirming: ConfirmIntent | null;
   status: StatusSnapshot | null;
   message: string | null;
   switching: boolean;
+  useClientModel: boolean;
 }
 
 export function buildCatalog(config: Config, status?: StatusSnapshot | null): CatalogItem[] {
   const entries: CatalogItem[] = [];
 
   for (const [provider, details] of Object.entries(config.providers)) {
-    const models = details.models ?? [];
+    // 与 src/routing.ts 的 buildModelCatalog 一致：非法模型名不进入可切换列表。
+    const models = (details.models ?? []).filter((model) => isValidModelName(model));
     if (models.length === 0) {
       entries.push({
         provider,
@@ -75,6 +80,7 @@ export function buildCatalog(config: Config, status?: StatusSnapshot | null): Ca
   const active = status?.active;
   if (
     active?.model &&
+    isValidModelName(active.model) &&
     config.providers[active.provider] &&
     !entries.some((entry) => entry.provider === active.provider && entry.model === active.model)
   ) {
@@ -93,6 +99,7 @@ export function buildCatalog(config: Config, status?: StatusSnapshot | null): Ca
 export function createTuiState(
   entries: CatalogItem[],
   status: StatusSnapshot | null,
+  useClientModel = true,
 ): TuiState {
   const active = status?.active;
   const activeIndex = active?.model
@@ -103,10 +110,11 @@ export function createTuiState(
   return {
     entries,
     selected: selected >= 0 ? selected : 0,
-    confirming: false,
+    confirming: null,
     status,
     message: null,
     switching: false,
+    useClientModel,
   };
 }
 
@@ -122,25 +130,38 @@ export function selectedEntry(state: TuiState): CatalogItem | null {
   return state.entries[state.selected] ?? null;
 }
 
-export function beginConfirm(state: TuiState): TuiState {
+/** Enter：进入“切换模型”确认态。 */
+export function beginSwitchConfirm(state: TuiState): TuiState {
   const entry = selectedEntry(state);
-  if (state.switching || !entry?.selectable || !entry.model) return state;
-  return { ...state, confirming: true, message: null };
+  if (state.switching || state.confirming || !entry?.selectable || !entry.model) return state;
+  return { ...state, confirming: "switch", message: null };
+}
+
+/** m：进入“切换模型路由”确认态。 */
+export function beginRoutingConfirm(state: TuiState): TuiState {
+  if (state.switching || state.confirming) return state;
+  return { ...state, confirming: "routing", message: null };
 }
 
 export function cancelConfirm(state: TuiState): TuiState {
   if (!state.confirming) return state;
-  return { ...state, confirming: false };
+  return { ...state, confirming: null };
 }
 
 export function beginSwitch(state: TuiState): TuiState | null {
   const entry = selectedEntry(state);
-  if (!state.confirming || state.switching || !entry?.selectable || !entry.model) return null;
-  return { ...state, confirming: false, switching: true, message: "切换中…" };
+  if (state.confirming !== "switch" || state.switching || !entry?.selectable || !entry.model)
+    return null;
+  return { ...state, confirming: null, switching: true, message: "切换中…" };
 }
 
 export function finishSwitch(state: TuiState, message: string | null): TuiState {
   return { ...state, switching: false, message };
+}
+
+export function beginRouting(state: TuiState): TuiState | null {
+  if (state.confirming !== "routing" || state.switching) return null;
+  return { ...state, confirming: null, switching: true, message: "切换中…" };
 }
 
 export function parseStatusSnapshot(payload: unknown): StatusSnapshot | null {

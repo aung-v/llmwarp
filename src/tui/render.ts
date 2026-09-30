@@ -90,6 +90,10 @@ function statusBadge(running: boolean): string {
   return running ? pc.bgGreen(pc.black(" ● 运行中 ")) : pc.bgRed(pc.white(" ● 离线 "));
 }
 
+function routingLabel(useClientModel: boolean): string {
+  return useClientModel ? "按客户端请求" : "统一用当前模型";
+}
+
 function modelRows(state: TuiState, height: number): string[] {
   const rows: string[] = [];
   if (state.entries.length === 0) {
@@ -135,11 +139,13 @@ function modelRows(state: TuiState, height: number): string[] {
 
 function daemonRows(state: TuiState): string[] {
   const status = state.status;
+  const routing = `模型路由  ${routingLabel(state.useClientModel)}`;
   if (!status) {
     return [
       "状态      离线",
       "供应商    —",
       "模型      —",
+      routing,
       "版本      —",
       "接入地址  —",
       "启动时间  —",
@@ -153,6 +159,7 @@ function daemonRows(state: TuiState): string[] {
     `状态      运行中`,
     `供应商    ${sanitize(status.active?.provider ?? "—")}`,
     `模型      ${status.active?.model ? sanitize(status.active.model) : "—"}`,
+    routing,
     `版本      ${sanitize(status.version)}`,
     `接入地址  ${sanitize(`http://127.0.0.1:${status.port}/v1`)}`,
     `启动时间  ${sanitize(status.startedAt || "—")}`,
@@ -192,7 +199,7 @@ function requestRows(state: TuiState, height: number): string[] {
 }
 
 function confirmationRows(state: TuiState): string[] {
-  if (state.confirming) {
+  if (state.confirming === "switch") {
     const selected = selectedEntry(state);
     return selected?.model
       ? [
@@ -201,6 +208,18 @@ function confirmationRows(state: TuiState): string[] {
           "y 确认切换    n / Esc 取消",
         ]
       : ["当前选中的是不可切换项", "", "n / Esc 取消"];
+  }
+
+  if (state.confirming === "routing") {
+    return [
+      `当前模式  ${routingLabel(state.useClientModel)}`,
+      "",
+      state.useClientModel
+        ? "切换为「统一用当前模型」？客户端请求的模型将被忽略。"
+        : "切换为「按客户端请求」？客户端写的模型名会生效。",
+      "",
+      "y 确认切换    n / Esc 取消",
+    ];
   }
 
   if (state.switching) {
@@ -243,14 +262,14 @@ export function renderTui(
 
   const message = state.message && !state.switching && !state.confirming ? state.message : null;
   const footerText = message
-    ? `${sanitize(message)}    ↑↓ 选择  Enter 确认  r 刷新  q 退出`
-    : "↑↓ 选择模型  Enter 确认切换  r 手动刷新  q 退出";
+    ? `${sanitize(message)}    ↑↓ 选择  Enter 确认  m 路由  r 刷新  q 退出`
+    : "↑↓ 选择模型  Enter 确认切换  m 切换路由模式  r 手动刷新  q 退出";
   const footer = [pc.dim(truncate(footerText, width))];
 
   const noticeRows =
     notice.length > 0
       ? panel(
-          state.switching ? "切换状态" : "确认切换",
+          state.switching ? "切换状态" : state.confirming === "routing" ? "切换模型路由" : "确认切换",
           notice,
           width,
           notice.length + 2,

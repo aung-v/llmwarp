@@ -11,7 +11,12 @@ src/ui.ts               # Shared output helpers and prompt wrappers
 src/searchCheckbox.ts   # Custom searchable checkbox prompt
 src/config.ts           # Source of truth for providers and active selection
 src/daemon.ts           # Daemon process state and admin API client
+src/tui/index.ts        # Persistent TUI process: key handling, refresh loop, config write then daemon sync
+src/tui/model.ts        # TUI view state (catalog, selection, confirm intent) and status parsing
+src/tui/render.ts       # Pure panel/footer rendering for the TUI
 ```
+
+`src/tui/model.ts` holds no configuration; it derives everything from `loadConfig()` and the admin status snapshot on each refresh.
 
 ## Rules
 
@@ -24,3 +29,8 @@ src/daemon.ts           # Daemon process state and admin API client
 ## Long-lived TUI Direction
 
 If a persistent TUI dashboard is added, keep it as a terminal frontend process that talks to the daemon through the existing admin API. Do not embed HTTP proxy routing into the TUI process, and do not make the proxy server depend on the TUI being open.
+
+## TUI Confirmations
+
+- `TuiState.confirming` is an intent enum (`null | "switch" | "routing"`, later also `"restart"`), never a boolean. Render and key dispatch branch on the intent so two confirmations can never consume each other's `y`/`Enter`.
+- Adding a new TUI write action means adding an intent plus its own `begin*`/`confirm*` pair; do not overload an existing intent.

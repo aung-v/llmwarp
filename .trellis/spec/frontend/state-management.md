@@ -8,6 +8,7 @@
 |---|---|
 | Providers, base URLs, model lists | `~/.llmwarp/config.jsonc` through `src/config.ts` |
 | Active provider/model | `activeProvider`/`activeModel` in config, with safe fallback by `resolveActive()` |
+| Model routing mode | `useClientModel` in config; the TUI writes it with `setUseClientModel()` then calls `POST /_llmwarp/reload` |
 | Daemon process and admin token | `~/.llmwarp/daemon.json` and `src/daemon.ts` |
 | Prompt/filter/local wizard state | Local variables inside the command flow |
 
@@ -17,6 +18,8 @@
 - Derive prompt choices from the current config rather than storing a duplicate frontend model.
 - After changing active provider/model through the daemon, print the resulting state instead of assuming the transition succeeded.
 - If a daemon is unavailable, degrade gracefully with a warning and preserve the user's local command result where possible.
+- A TUI write is `config.jsonc` first, then the daemon admin call. If the reload fails, keep the config write, surface the error, and re-read the mode from disk instead of trusting the in-memory value.
+- Never display a cached `useClientModel`: the status panel must reflect the value read from `config.jsonc` on the latest refresh.
 
 ## Future Dashboard
 

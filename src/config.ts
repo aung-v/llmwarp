@@ -266,6 +266,16 @@ export function updateActive(provider: string, model: string): void {
   writeConfigText(text);
 }
 
+/** 唯一写入点：模型路由开关（useClientModel），范围编辑保留注释与格式。 */
+export function setUseClientModel(useClientModel: boolean): void {
+  const text = readConfigText();
+  const next = applyEdits(
+    text,
+    modify(text, ["useClientModel"], useClientModel, { formattingOptions: FORMAT }),
+  );
+  writeConfigText(next);
+}
+
 export function upsertProvider(name: string, provider: Provider): void {
   const text = readConfigText();
   const next = applyEdits(text, modify(text, ["providers", name], provider, { formattingOptions: FORMAT }));

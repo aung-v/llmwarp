@@ -1,3 +1,4 @@
-{"file": ".trellis/spec/frontend/state-management.md", "reason": "'核对状态归属与权威来源'"}
-{"file": ".trellis/spec/frontend/interaction-guidelines.md", "reason": "'核对交互与文案一致性'"}
-{"file": ".trellis/spec/backend/error-handling.md", "reason": "'核对失败路径'"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "核对写配置 + reload 的顺序与唯一来源原则。"}
+{"file": ".trellis/spec/frontend/interaction-guidelines.md", "reason": "核对确认态、取消语义与文案。"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "核对测试覆盖与 typecheck。"}
+{"file": ".trellis/spec/backend/model-routing.md", "reason": "核对 useClientModel 语义与非法模型名过滤。"}

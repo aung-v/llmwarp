@@ -1,9 +1,11 @@
 import readline from "node:readline";
-import { loadConfig, updateActive } from "../config.js";
+import { loadConfig, setUseClientModel, updateActive } from "../config.js";
 import { adminRequest, daemonRunning } from "../daemon.js";
 import {
-  beginConfirm,
+  beginRouting,
+  beginRoutingConfirm,
   beginSwitch,
+  beginSwitchConfirm,
   buildCatalog,
   cancelConfirm,
   createTuiState,
@@ -24,11 +26,17 @@ const SHOW_CURSOR = "\u001B[?25h";
 const ENTER_ALTERNATE_SCREEN = "\u001B[?1049h\u001B[H\u001B[2J";
 const LEAVE_ALTERNATE_SCREEN = "\u001B[?1049l";
 
-async function readCatalog(status: StatusSnapshot | null): Promise<CatalogItem[]> {
+async function readCatalog(
+  status: StatusSnapshot | null,
+): Promise<{ entries: CatalogItem[]; useClientModel: boolean }> {
   try {
-    return buildCatalog(loadConfig(), status);
+    const config = loadConfig();
+    return {
+      entries: buildCatalog(config, status),
+      useClientModel: config.useClientModel ?? true,
+    };
   } catch {
-    return [];
+    return { entries: [], useClientModel: true };
   }
 }
 
@@ -40,6 +48,15 @@ async function readCatalog(status: StatusSnapshot | null): Promise<CatalogItem[]
 export async function applyActiveSelection(provider: string, model: string): Promise<void> {
   updateActive(provider, model);
   await adminRequest("POST", "use", { provider, model });
+}
+
+/**
+ * 切换模型路由模式：先落盘 useClientModel 再 reload daemon。
+ * daemon 未运行或 reload 失败时保留已写入的配置，并把错误抛给调用方展示。
+ */
+export async function applyRoutingMode(useClientModel: boolean): Promise<void> {
+  setUseClientModel(useClientModel);
+  await adminRequest("POST", "reload");
 }
 
 export async function startTui(): Promise<void> {
@@ -73,7 +90,7 @@ export async function startTui(): Promise<void> {
     try {
       const running = daemonRunning();
       const status = running ? parseStatusSnapshot(await adminRequest("GET", "status")) : null;
-      const entries = await readCatalog(status);
+      const { entries, useClientModel } = await readCatalog(status);
       const previousEntry = state.entries[state.selected];
       const previousSelected = previousEntry
         ? entries.findIndex(
@@ -82,10 +99,13 @@ export async function startTui(): Promise<void> {
           )
         : -1;
       const previousConfirming = state.confirming;
-      state = createTuiState(entries, status);
+      state = createTuiState(entries, status, useClientModel);
       if (previousSelected >= 0) state.selected = previousSelected;
-      state.confirming =
-        previousConfirming && Boolean(state.entries[state.selected]?.selectable);
+      if (previousConfirming === "switch") {
+        state.confirming = state.entries[state.selected]?.selectable ? "switch" : null;
+      } else if (previousConfirming === "routing") {
+        state.confirming = "routing";
+      }
       state.message = message;
     } catch (err) {
       state.message = (err as Error).message;
@@ -121,6 +141,30 @@ export async function startTui(): Promise<void> {
       await refresh(`已切换到 ${entry.label}`);
     } catch (err) {
       state = finishSwitch(state, (err as Error).message);
+      draw();
+    }
+  };
+
+  const confirmRouting = async (): Promise<void> => {
+    const routingState = beginRouting(state);
+    if (!routingState) return;
+    const nextValue = !state.useClientModel;
+    state = routingState;
+    draw();
+
+    try {
+      await applyRoutingMode(nextValue);
+      state = finishSwitch(state, null);
+      await refresh(nextValue ? "已切换为按客户端请求" : "已切换为统一用当前模型");
+    } catch (err) {
+      // 写入可能已经落盘但 reload 失败：按配置文件回读，避免显示旧模式。
+      let mode = state.useClientModel;
+      try {
+        mode = loadConfig().useClientModel ?? mode;
+      } catch {
+        // 配置不可读时保留当前显示
+      }
+      state = { ...finishSwitch(state, (err as Error).message), useClientModel: mode };
       draw();
     }
   };
@@ -175,14 +219,22 @@ export async function startTui(): Promise<void> {
 
     if (key.name === "return" || key.name === "enter") {
       if (state.switching) return;
-      state = beginConfirm(state);
+      state = beginSwitchConfirm(state);
+      draw();
+      return;
+    }
+
+    if (key.name === "m") {
+      if (state.switching) return;
+      state = beginRoutingConfirm(state);
       draw();
       return;
     }
 
     if (key.name === "y") {
       if (state.switching) return;
-      void confirmSwitch();
+      if (state.confirming === "switch") void confirmSwitch();
+      else if (state.confirming === "routing") void confirmRouting();
     }
   };
 

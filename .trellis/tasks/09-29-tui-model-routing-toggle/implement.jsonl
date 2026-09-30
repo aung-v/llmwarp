@@ -1,5 +1,5 @@
-{"file": ".trellis/spec/frontend/architecture.md", "reason": "'TUI"}
-{"file": ".trellis/spec/frontend/interaction-guidelines.md", "reason": "'确认交互、键位提示与中文文案'"}
-{"file": ".trellis/spec/frontend/state-management.md", "reason": "'配置文件是唯一"}
-{"file": ".trellis/spec/backend/error-handling.md", "reason": "'写配置或"}
-{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "'typecheck/test/build"}
+{"file": ".trellis/spec/frontend/architecture.md", "reason": "TUI 的模块边界与状态机位置。"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "config.jsonc 是配置唯一来源，TUI 写配置后要靠 reload 让 daemon 生效。"}
+{"file": ".trellis/spec/frontend/interaction-guidelines.md", "reason": "两步确认、键位提示与中文文案的既有约定。"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "TUI 的测试与 typecheck 要求。"}
+{"file": ".trellis/spec/backend/model-routing.md", "reason": "useClientModel 与模型名合法性的契约。"}

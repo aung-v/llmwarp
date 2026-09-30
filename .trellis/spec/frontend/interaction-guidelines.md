@@ -31,6 +31,24 @@ info(dim(`客户端接入地址 ${endpointUrl(config)}`));
 - Return early after `fail()` only when the user has already received the actionable reason.
 - Keep exit behavior consistent: `ExitPromptError` should be handled by the top-level `run()` boundary in `src/cli.ts`.
 
+## TUI Keys
+
+Current persistent-TUI key map, kept in `src/tui/index.ts` and surfaced in the footer:
+
+| Key | Action |
+|---|---|
+| `↑`/`↓`, `j`/`k` | Move the selection (also cancels a pending confirmation) |
+| `Enter` | Enter the "switch model" confirmation |
+| `m` | Enter the "switch model routing mode" confirmation |
+| `y` | Confirm whichever intent is pending |
+| `n`, `Esc` | Cancel the pending confirmation |
+| `r` | Refresh state and catalog |
+| `q`, `Ctrl-C` | Quit the TUI (the daemon keeps running) |
+
+- Confirmations are two-step and intent-scoped: the prompt must restate the consequence (`切换为「统一用当前模型」？客户端请求的模型将被忽略。`), not just the action.
+- While an action is in flight (`state.switching`), navigation and other action keys are ignored.
+- Never render the daemon token or provider API keys; sanitize anything that comes from config or daemon state.
+
 ## Copy
 
 - Keep user-facing copy in Chinese.

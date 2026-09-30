@@ -1,8 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  beginConfirm,
+  beginRouting,
+  beginRoutingConfirm,
   beginSwitch,
+  beginSwitchConfirm,
   buildCatalog,
   cancelConfirm,
   createTuiState,
@@ -69,10 +71,10 @@ test("TUI 选择有边界且确认可以取消", () => {
   state = selectNext(state);
   assert.equal(state.selected, 1);
 
-  state = beginConfirm(state);
-  assert.equal(state.confirming, true);
+  state = beginSwitchConfirm(state);
+  assert.equal(state.confirming, "switch");
   state = cancelConfirm(state);
-  assert.equal(state.confirming, false);
+  assert.equal(state.confirming, null);
 });
 
 test("只有确认后才会进入切换状态", () => {
@@ -81,12 +83,12 @@ test("只有确认后才会进入切换状态", () => {
 
   assert.equal(beginSwitch(state), null);
 
-  state = beginConfirm(state);
+  state = beginSwitchConfirm(state);
   const switched = beginSwitch(state);
   assert.ok(switched);
   if (switched) state = switched;
   assert.equal(state.switching, true);
-  assert.equal(state.confirming, false);
+  assert.equal(state.confirming, null);
 });
 
 test("渲染包含状态且不泄露密钥", () => {
@@ -172,7 +174,7 @@ test("渲染标记来自旧配置的 active 模型", () => {
 
 test("确认态显示目标和取消方式", () => {
   let state = createTuiState(buildCatalog(config), status);
-  state = beginConfirm(state);
+  state = beginSwitchConfirm(state);
   const output = renderTui(state, { height: 24, width: 80 });
 
   assert.match(output, /确认切换/);
@@ -208,4 +210,128 @@ test("面板补空格时保留行内颜色", () => {
     assert.match(output, /\u001B\[32m/);
     assert.match(output, /\u001B\[44m/);
   }
+});
+
+test("状态区展示模型路由模式，且与 useClientModel 一致", () => {
+  const entries = buildCatalog(config);
+  const clientMode = renderTui(createTuiState(entries, status, true), { height: 24, width: 80 });
+  const unifiedMode = renderTui(createTuiState(entries, status, false), { height: 24, width: 80 });
+
+  assert.match(clientMode, /模型路由\s+按客户端请求/);
+  assert.doesNotMatch(clientMode, /统一用当前模型/);
+  assert.match(unifiedMode, /模型路由\s+统一用当前模型/);
+  assert.doesNotMatch(unifiedMode, /按客户端请求/);
+});
+
+test("离线状态区同样展示模型路由模式", () => {
+  const output = renderTui(createTuiState(buildCatalog(config), null, false), {
+    height: 24,
+    width: 80,
+  });
+
+  assert.match(output, /模型路由\s+统一用当前模型/);
+});
+
+test("m 进入路由确认态，n / Esc 取消且不影响 switch 确认", () => {
+  let state = createTuiState(buildCatalog(config), status, true);
+
+  state = beginRoutingConfirm(state);
+  assert.equal(state.confirming, "routing");
+  // switch 意图不能越过路由确认直接触发
+  assert.equal(beginSwitch(state), null);
+
+  state = cancelConfirm(state);
+  assert.equal(state.confirming, null);
+  assert.equal(state.switching, false);
+
+  state = beginSwitchConfirm(state);
+  state = cancelConfirm(state);
+  assert.equal(state.confirming, null);
+});
+
+test("switch 与 routing 确认态互不串味", () => {
+  let state = createTuiState(buildCatalog(config), status, true);
+
+  state = beginSwitchConfirm(state);
+  assert.equal(state.confirming, "switch");
+  // 已是 switch 确认态时 m 不再改变意图
+  assert.equal(beginRoutingConfirm(state).confirming, "switch");
+  // routing 的 begin 不能消费 switch 确认
+  assert.equal(beginRouting(state), null);
+
+  state = cancelConfirm(state);
+  state = beginRoutingConfirm(state);
+  assert.equal(state.confirming, "routing");
+  assert.equal(beginRoutingConfirm(state).confirming, "routing");
+
+  const routing = beginRouting(state);
+  assert.ok(routing);
+  assert.equal(routing?.confirming, null);
+  assert.equal(routing?.switching, true);
+});
+
+test("路由确认态文案说明后果", () => {
+  const entries = buildCatalog(config);
+  const toUnified = renderTui(beginRoutingConfirm(createTuiState(entries, status, true)), {
+    height: 24,
+    width: 80,
+  });
+  const toClient = renderTui(beginRoutingConfirm(createTuiState(entries, status, false)), {
+    height: 24,
+    width: 80,
+  });
+
+  assert.match(toUnified, /当前模式\s+按客户端请求/);
+  assert.match(toUnified, /切换为「统一用当前模型」？客户端请求的模型将被忽略。/);
+  assert.match(toUnified, /切换模型路由/);
+  assert.match(toClient, /当前模式\s+统一用当前模型/);
+  assert.match(toClient, /切换为「按客户端请求」？客户端写的模型名会生效。/);
+});
+
+test("buildCatalog 过滤非法模型名", () => {
+  const entries = buildCatalog({
+    ...config,
+    providers: {
+      ark: {
+        baseUrl: "https://ark.test/v1",
+        apiKey: "secret-key",
+        models: ["good-model", "bad name", "bad\u0001name", "   ", ""],
+      },
+    },
+  });
+
+  assert.deepEqual(entries.map((entry) => entry.model), ["good-model"]);
+  assert.equal(entries[0]?.selectable, true);
+});
+
+test("buildCatalog 对全非法模型列表给出不可选占位", () => {
+  const entries = buildCatalog({
+    ...config,
+    providers: {
+      ark: { baseUrl: "https://ark.test/v1", apiKey: "secret-key", models: ["a b", "\u0001"] },
+    },
+  });
+
+  assert.deepEqual(entries.map((entry) => entry.label), ["ark/(no models)"]);
+  assert.equal(entries[0]?.selectable, false);
+});
+
+test("buildCatalog 不把非法的 active 模型加入可切换列表", () => {
+  const entries = buildCatalog(
+    {
+      ...config,
+      providers: {
+        ark: { baseUrl: "https://ark.test/v1", apiKey: "secret-key", models: ["good-model"] },
+      },
+    },
+    { ...status, active: { provider: "ark", model: "bad model" } },
+  );
+
+  assert.deepEqual(entries.map((entry) => entry.label), ["ark/good-model"]);
+});
+
+test("页脚提示 m 路由模式键位", () => {
+  const output = renderTui(createTuiState(buildCatalog(config), status), { height: 24, width: 80 });
+
+  assert.match(output, /m 切换路由模式/);
 });
