@@ -114,3 +114,25 @@ Pushed the model-name rule down to the single writer: updateActive now validates
 ### Status
 
 [OK] **Completed**
+
+
+## Session 5: TUI model routing mode toggle
+<!-- trellis-session: v=2 fp=8e6d8c7e2ce31203 -->
+
+**Date**: 2026-09-30
+**Task**: TUI model routing mode toggle
+**Branch**: `master`
+
+### Summary
+
+The TUI shows the daemon's useClientModel mode (按客户端请求 / 统一用当前模型) from config.jsonc and key m flips it: confirm writes the value via a new range-edit writer that preserves comments, then calls POST /_llmwarp/reload; on reload failure the write is kept, the error is shown, and the mode is re-read from disk. TuiState.confirming became an intent enum (switch | routing) so the two confirmations cannot consume each other's keys, deliberately leaving room for the restart intent. TUI buildCatalog now filters illegal model names with isValidModelName. Spec updates: frontend architecture (src/tui layers), state-management (mode ownership + config-first write order), interaction-guidelines (TUI key map and intent-scoped confirmations), README key list. Verified: typecheck, build, 76/76 tests, plus mutation checks proving the routing tests fail when the write or the intent guard is broken.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9a737f7` | feat(tui): show and toggle the model routing mode |
+
+### Status
+
+[OK] **Completed**
