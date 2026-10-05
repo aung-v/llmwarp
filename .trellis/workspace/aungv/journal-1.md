@@ -136,3 +136,25 @@ The TUI shows the daemon's useClientModel mode (按客户端请求 / 统一用�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 6: TUI daemon lifecycle, feedback panel, and provider management
+<!-- trellis-session: v=2 fp=b3d0d31a85387e22 -->
+
+**Date**: 2026-10-05
+**Task**: TUI daemon lifecycle, feedback panel, and provider management
+**Branch**: `master`
+
+### Summary
+
+Fixed the TUI daemon start/restart path: admin/readiness fetches now have timeouts (no more permanent 处理中), restart stops then waits for the old pid to exit with a SIGKILL fallback, the daemon force-closes connections on shutdown, and daemon.json is cleared only by its owner. Results now land in the bottom-right 反馈 / 请求活动 panel (✓/✗ + full reason) and survive auto-refresh; a missing config is generated once and reported; debug logging is opt-in. Added a 供应商 page that reuses the existing llmwarp add/edit/remove flows by suspending the TUI and restoring it. Check agents caught and fixed a delete-path stuck-switching bug plus spec drift; added a regression test. Verified: typecheck, build, tests 101/101, and the delete path end to end.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `bbaa223` | feat(tui): daemon lifecycle, feedback panel, and provider management |
+
+### Status
+
+[OK] **Completed**
