@@ -36,6 +36,11 @@ Example coverage to preserve:
 - Use narrow runtime checks when parsing untrusted JSON, as `normalizeConfig` does in `src/config.ts`.
 - Avoid `any`; when catching unknown errors, narrow to `Error` plus only the extra fields actually needed.
 
+## Debug Logging
+
+- The TUI/daemon debug log (`src/debuglog.ts`) is **off by default** and must stay that way: `resetDebugLog`/`debugLog` are no-ops unless `LLMWARP_DEBUG_LOG=<path>` (explicit path) or `LLMWARP_DEBUG=1` (repo-root `tui-debug.log`, gitignored) is set. Do not add per-keystroke or per-refresh file writes that run in normal use.
+- Never log tokens or provider API keys; log pids, ports, method/status, and timing only.
+
 ## Code Review Checklist
 
 - Does the change preserve loopback-only daemon behavior and secure config file permissions?

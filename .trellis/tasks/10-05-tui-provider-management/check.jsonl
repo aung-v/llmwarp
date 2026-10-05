@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/frontend/interaction-guidelines.md", "reason": "核对交互、反馈与终端恢复"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "typecheck/test/build 门槛"}

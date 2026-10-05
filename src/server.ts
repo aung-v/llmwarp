@@ -6,7 +6,7 @@ import {
   resolveActive,
   resolveApiKey,
   writeDaemonInfo,
-  clearDaemonInfo,
+  clearDaemonInfoFor,
   CONFIG_PATH,
   type Config,
 } from "./config.js";
@@ -15,6 +15,7 @@ import { buildModelCatalog, resolveModelRoute, RoutingError } from "./routing.js
 import { RequestMetrics } from "./metrics.js";
 import { accessLines } from "./endpoint.js";
 import { portInUseMessage, findPortOwner } from "./net.js";
+import { debugLog } from "./debuglog.js";
 
 export const VERSION = "1.0.0";
 const ADMIN_PREFIX = "/_llmwarp/";
@@ -226,16 +227,24 @@ export async function startServer(options: StartServerOptions = {}): Promise<Ser
   });
 
   writeDaemonInfo({ pid: process.pid, port, token, startedAt, version: VERSION });
+  debugLog("server", "listening", { pid: process.pid, port });
   process.stdout.write(`llmwarp 已启动（端口 ${port}）\n`);
   for (const line of accessLines(config, port)) process.stdout.write(`${line}\n`);
   process.stdout.write(`切换供应商/模型：llmwarp use\n`);
 
   const close = async (): Promise<void> => {
-    clearDaemonInfo();
+    debugLog("server", "close 开始", { pid: process.pid });
+    // 只 close() 会一直等已有 keep-alive 连接结束，进程可能长时间不退出；
+    // 强制断开现有连接，让 stop/restart 后旧进程立即消失、旧 token 不再响应。
+    server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    // 服务真正停下后再删；且只删属于自己的文件，避免抹掉已接班的新 daemon 的信息。
+    clearDaemonInfoFor(process.pid);
+    debugLog("server", "close 完成", { pid: process.pid });
   };
 
   const shutdown = (): void => {
+    debugLog("server", "收到退出信号", { pid: process.pid });
     void close().then(() => process.exit(0));
   };
   process.on("SIGINT", shutdown);

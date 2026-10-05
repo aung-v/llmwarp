@@ -36,6 +36,14 @@ else res.end();
 - Distinguish `ok`, `auth`, `unreachable`, `http`, and `nokey`.
 - Treat a reachable provider without `/models` as usable rather than as a hard failure.
 
+## Daemon Stop / Restart
+
+- `stopDaemon()` only sends SIGTERM and returns; it does not prove the process exited.
+- Liveness is `daemon.json` + `isAlive(pid)`, not "is the port being served". So `stopDaemon()` and the daemon's own shutdown must not delete `daemon.json` until the process is really gone; deleting it early makes the TUI show 离线 while an old daemon is still alive and still attached to the client's keep-alive connection. The daemon clears the file at the end of `close()`.
+- A caller that immediately starts a new daemon on the same port must wait for the old pid to disappear (`waitForDaemonExit`) before starting.
+- The daemon's shutdown must `server.closeAllConnections()` before `server.close()`. Otherwise open keep-alive connections keep the old process alive, the new daemon binds the same port, and a client that reuses its pooled connection keeps hitting the old process and getting `401 unauthorized` with the old token.
+- Admin `fetch` calls need a timeout (`adminRequest`, the readiness poll in `startDaemon`). Without one, a half-open connection to a stale daemon makes the TUI hang on 处理中 forever instead of surfacing an error.
+
 ## Forbidden Patterns
 
 - Do not print secrets in exceptions or diagnostics.

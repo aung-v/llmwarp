@@ -33,20 +33,24 @@ info(dim(`客户端接入地址 ${endpointUrl(config)}`));
 
 ## TUI Keys
 
-Current persistent-TUI key map, kept in `src/tui/index.ts` and surfaced in the footer:
+Current persistent-TUI key map, kept in `src/tui/index.ts` and surfaced in the footer. There are no single-letter action shortcuts; every action is a navigation-plus-`Enter` flow.
 
 | Key | Action |
 |---|---|
-| `↑`/`↓`, `j`/`k` | Move the selection (also cancels a pending confirmation) |
-| `Enter` | Enter the "switch model" confirmation |
-| `m` | Enter the "switch model routing mode" confirmation |
-| `y` | Confirm whichever intent is pending |
-| `n`, `Esc` | Cancel the pending confirmation |
+| `←` / `→` | Move focus between the left list and the daemon panel; while focus is on the top nav bar, cycle between the `模型` / `路由` / `供应商` pages |
+| `↑` / `↓` | Move the selection within the current page's list (from the nav bar, descend into the list) |
+| `Enter` | Trigger the focused item: confirm a model/routing change, open the restart confirmation while focused on the daemon panel, or start the provider add/edit/remove flow on the `供应商` page |
+| `Esc` | Cancel a pending confirmation; outside a confirmation, move focus back one level (daemon → list, list → nav) |
 | `r` | Refresh state and catalog |
 | `q`, `Ctrl-C` | Quit the TUI (the daemon keeps running) |
 
-- Confirmations are two-step and intent-scoped: the prompt must restate the consequence (`切换为「统一用当前模型」？客户端请求的模型将被忽略。`), not just the action.
-- While an action is in flight (`state.switching`), navigation and other action keys are ignored.
+- Navigation is a two-level structure: a top nav bar (`模型` / `路由` / `供应商`), the current page's list, and the right-hand daemon panel. The selected item and the focused region must both be visibly distinguishable.
+- The `供应商` page is the provider-management entry: the list rows open the existing `edit` flow, and the `[ + 添加供应商 ]` / `[ - 删除 … ]` rows trigger `add` / `remove`. There is no provider business logic in the TUI. Triggering one suspends the TUI (leave the alternate screen, disable raw mode), runs the existing CLI flow unchanged (`inquirer` / `$EDITOR` work as usual), waits for a key, then re-enters the alternate screen and refreshes. Failures/aborts restore the TUI and land in the bottom-right feedback area.
+- Action results live in the bottom-right `反馈 / 请求活动` panel, together with request metrics. Every action (switch model/routing, start/restart daemon) must append a `✓`/`✗` event with the full reason on failure; the event survives auto-refresh instead of being written to a footer line that the next refresh erases.
+- Confirmations are two-step and intent-scoped: the prompt must restate the consequence (`切换为「统一用当前模型」？客户端请求的模型将被忽略。`), not just the action. The restart confirmation must state that in-flight `/v1` requests are interrupted.
+- There is no key that restarts the daemon directly; the daemon panel button must be focused and confirmed.
+- While a confirmation is pending, only `Enter` and `Esc` act; `q`, `r`, and the arrow keys are ignored.
+- While an action is in flight (`state.switching`), every key except `Ctrl-C` is ignored and the interactive controls render disabled (dimmed).
 - Never render the daemon token or provider API keys; sanitize anything that comes from config or daemon state.
 
 ## Copy

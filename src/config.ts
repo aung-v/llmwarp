@@ -108,6 +108,16 @@ export function writeConfigText(text: string): void {
   writeFileSync(CONFIG_PATH, text, { encoding: "utf8", mode: 0o600 });
 }
 
+/**
+ * 配置缺失时用示例模板补齐（TUI 首次启动用）。已存在则原样保留，返回是否新建。
+ * 只在“文件不存在”时触发；JSONC 解析错误不覆盖，交给调用方报错。
+ */
+export function ensureConfigFile(): boolean {
+  if (configExists()) return false;
+  writeConfigText(CONFIG_TEMPLATE);
+  return true;
+}
+
 export function loadConfig(): Config {
   const text = readConfigText();
   const errors: ParseError[] = [];
@@ -253,6 +263,16 @@ export function writeDaemonInfo(info: DaemonInfo): void {
 
 export function clearDaemonInfo(): void {
   if (existsSync(DAEMON_PATH)) rmSync(DAEMON_PATH, { force: true });
+}
+
+/**
+ * 只删除"属于该 pid"的 daemon.json。老 daemon 退出时若新 daemon 已经写过文件，
+ * 直接删会把新进程的信息抹掉，导致"进程在跑但 json 对不上/为空"。
+ */
+export function clearDaemonInfoFor(pid: number): void {
+  const info = readDaemonInfo();
+  if (info && info.pid !== pid) return;
+  clearDaemonInfo();
 }
 
 export function updateActive(provider: string, model: string): void {

@@ -30,7 +30,10 @@ src/tui/render.ts       # Pure panel/footer rendering for the TUI
 
 If a persistent TUI dashboard is added, keep it as a terminal frontend process that talks to the daemon through the existing admin API. Do not embed HTTP proxy routing into the TUI process, and do not make the proxy server depend on the TUI being open.
 
-## TUI Confirmations
+## TUI Pages, Focus, and Confirmations
 
-- `TuiState.confirming` is an intent enum (`null | "switch" | "routing"`, later also `"restart"`), never a boolean. Render and key dispatch branch on the intent so two confirmations can never consume each other's `y`/`Enter`.
+- `TuiState.page` (`"models" | "routing" | "providers"`) selects the left-hand list; `TuiState.focus` (`"nav" | "list" | "daemon"`) selects the active region. The daemon panel owns the restart/start button, so a restart can only start from `focus === "daemon"`.
+- `TuiState.confirming` is an intent enum (`null | "switch" | "routing" | "restart" | "remove-provider"`), never a boolean. Render and key dispatch branch on the intent so two confirmations can never consume each other's `Enter`.
 - Adding a new TUI write action means adding an intent plus its own `begin*`/`confirm*` pair; do not overload an existing intent.
+- The TUI never owns the daemon lifecycle: the restart action calls the existing `stopDaemon()` / `startDaemon()` from `src/daemon.ts` after explicit confirmation, and `src/tui/model.ts` stays pure view state.
+- A restart must wait for the old pid to actually exit (`waitForDaemonExit`) before starting the new daemon; otherwise the unchanged origin/port lets the client reuse a keep-alive connection to the old process and keep sending the old admin token.

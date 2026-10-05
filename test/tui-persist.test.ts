@@ -1,9 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import http from "node:http";
+import { spawn } from "node:child_process";
+import type { Config } from "../src/config.js";
 
 const home = mkdtempSync(join(tmpdir(), "llmwarp-tui-persist-"));
 process.env.HOME = home;
@@ -14,13 +16,21 @@ const {
   CONFIG_PATH,
   DAEMON_PATH,
   clearDaemonInfo,
+  clearDaemonInfoFor,
+  ensureConfigFile,
   loadConfig,
   writeDaemonInfo,
 } = await import("../src/config.js");
-const { adminRequest } = await import("../src/daemon.js");
+const { adminRequest, stopDaemon } = await import("../src/daemon.js");
 const { startServer } = await import("../src/server.js");
-const { applyActiveSelection, applyRoutingMode } = await import("../src/tui/index.js");
-const { beginRoutingConfirm, cancelConfirm, createTuiState } = await import("../src/tui/model.js");
+const { applyActiveSelection, applyRoutingMode, restartDaemon } = await import("../src/tui/index.js");
+const { beginRoutingConfirm, cancelConfirm, createTuiState, focusNext, focusPrev, moveSelection } =
+  await import("../src/tui/model.js");
+
+/** 走真实键位路径切到路由页：← 到导航栏 → → 换页 → ↓ 把焦点落回列表。 */
+function openRoutingPage(state: ReturnType<typeof createTuiState>): ReturnType<typeof createTuiState> {
+  return moveSelection(focusNext(focusPrev(state)), 1);
+}
 
 const COMMENTED_CONFIG = `{
   // 保留这条注释
@@ -156,7 +166,11 @@ test("路由确认取消：不写配置、不启动 daemon", () => {
   writeFileSync(CONFIG_PATH, COMMENTED_CONFIG);
   const before = readFileSync(CONFIG_PATH, "utf8");
 
-  const confirming = beginRoutingConfirm(createTuiState([], null, true));
+  // 选中与当前模式相反的一项，否则 beginRoutingConfirm 只提示“已是当前模式”。
+  const confirming = beginRoutingConfirm({
+    ...openRoutingPage(createTuiState([], null, true)),
+    routingSelected: 1,
+  });
   assert.equal(confirming.confirming, "routing");
   const cancelled = cancelConfirm(confirming);
   assert.equal(cancelled.confirming, null);
@@ -238,4 +252,199 @@ test("applyRoutingMode 后 daemon 立刻按新模式路由", async () => {
     await alpha.close();
     await beta.close();
   }
+});
+
+test("restartDaemon 运行中先停后启", async () => {
+  const calls: string[] = [];
+  const result = await restartDaemon({
+    daemonRunning: () => ({ pid: 4242, port: 8787, token: "t", startedAt: "", version: "test" }),
+    stopDaemon: () => {
+      calls.push("stop");
+      return true;
+    },
+    waitForDaemonExit: async (pid) => {
+      calls.push(`wait:${pid}`);
+      return true;
+    },
+    startDaemon: async (port) => {
+      calls.push(`start:${port}`);
+      return {};
+    },
+    getPort: () => 8787,
+    loadConfig: () => ({ port: 8787 }) as unknown as Config,
+  });
+
+  assert.equal(result, "restarted");
+  assert.deepEqual(calls, ["stop", "wait:4242", "start:8787"]);
+});
+
+test("restartDaemon 离线时只启动，不调用 stop", async () => {
+  const calls: string[] = [];
+  const result = await restartDaemon({
+    daemonRunning: () => null,
+    stopDaemon: () => {
+      calls.push("stop");
+      return false;
+    },
+    waitForDaemonExit: async (pid) => {
+      calls.push(`wait:${pid}`);
+      return true;
+    },
+    startDaemon: async (port) => {
+      calls.push(`start:${port}`);
+      return {};
+    },
+    getPort: () => 9999,
+    loadConfig: () => ({ port: 9999 }) as unknown as Config,
+  });
+
+  assert.equal(result, "started");
+  assert.deepEqual(calls, ["start:9999"]);
+});
+
+test("restartDaemon 启动失败向上抛且保留停止结果", async () => {
+  const calls: string[] = [];
+  await assert.rejects(
+    () =>
+      restartDaemon({
+        daemonRunning: () => ({ pid: 4242, port: 8787, token: "t", startedAt: "", version: "test" }),
+        stopDaemon: () => {
+          calls.push("stop");
+          return true;
+        },
+        waitForDaemonExit: async (pid) => {
+          calls.push(`wait:${pid}`);
+          return true;
+        },
+        startDaemon: async () => {
+          calls.push("start");
+          throw new Error("守护进程启动超时");
+        },
+        getPort: () => 8787,
+        loadConfig: () => ({ port: 8787 }) as unknown as Config,
+      }),
+    /守护进程启动超时/,
+  );
+
+  assert.deepEqual(calls, ["stop", "wait:4242", "start"]);
+});
+
+test("同端口重启：旧 daemon 关闭后新 token 立即生效（keep-alive 不复用旧连接）", async () => {
+  const port = await freePort();
+  writeConfig(port, "ark", "glm");
+
+  const first = await startServer({ port });
+  // 先用旧 token 成功请求一次，让客户端保留一条到旧进程的 keep-alive 连接。
+  assert.ok(await adminRequest("GET", "status"));
+
+  // 模拟 SIGTERM：即使还有 keep-alive 连接，close() 也必须立刻返回。
+  const closed = await Promise.race([
+    first.close().then(() => "closed" as const),
+    new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 2000)),
+  ]);
+  assert.equal(closed, "closed", "close() 不应被旧 keep-alive 连接拖住");
+
+  // 同端口起新 daemon：复用同一 origin 的客户端必须换到新 token，而不是继续打旧进程。
+  const second = await startServer({ port });
+  try {
+    const status = (await adminRequest("GET", "status")) as {
+      active: { provider: string } | null;
+    };
+    assert.equal(status.active?.provider, "ark");
+  } finally {
+    await second.close();
+  }
+});
+
+test("adminRequest 对不响应的 daemon 会超时报错，不会让界面永久卡在“处理中”", async () => {
+  clearDaemonInfo();
+  // 只接受连接、永不响应，模拟旧 daemon 半开/卡死的 keep-alive 连接。
+  const stuck = http.createServer(() => {
+    /* 故意不 end */
+  });
+  await new Promise<void>((r) => stuck.listen(0, "127.0.0.1", () => r()));
+  const stuckPort = (stuck.address() as { port: number }).port;
+  writeDaemonInfo({
+    pid: process.pid,
+    port: stuckPort,
+    token: "test-token",
+    startedAt: new Date().toISOString(),
+    version: "test",
+  });
+
+  try {
+    const started = Date.now();
+    await assert.rejects(() => adminRequest("GET", "status", undefined, 300), /无响应|超时/);
+    assert.ok(Date.now() - started < 3000, "超时应在传入的时间内返回，而不是永久挂起");
+  } finally {
+    clearDaemonInfo();
+    stuck.closeAllConnections();
+    await new Promise<void>((r) => stuck.close(() => r()));
+  }
+});
+
+test("stopDaemon 不提前删除 daemon.json，避免老进程还活着却显示离线", async () => {
+  clearDaemonInfo();
+  // 用一个存活但不清理文件的外部进程冒充 daemon，验证 stop 只发信号、不删文件。
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    stdio: "ignore",
+  });
+  try {
+    writeDaemonInfo({
+      pid: child.pid ?? 0,
+      port: 1,
+      token: "test-token",
+      startedAt: new Date().toISOString(),
+      version: "test",
+    });
+
+    assert.equal(stopDaemon(), true);
+    assert.equal(
+      existsSync(DAEMON_PATH),
+      true,
+      "进程可能仍在退出，daemon.json 必须等进程真正结束再删",
+    );
+  } finally {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // 已退出
+    }
+    clearDaemonInfo();
+  }
+});
+
+test("老 daemon 退出不会误删新 daemon 的 daemon.json", () => {
+  clearDaemonInfo();
+  writeDaemonInfo({
+    pid: 2222,
+    port: 8833,
+    token: "new-daemon",
+    startedAt: new Date().toISOString(),
+    version: "test",
+  });
+
+  // 老进程（pid 1111）退出时清理，不能动到 2222 的文件。
+  clearDaemonInfoFor(1111);
+  assert.equal(existsSync(DAEMON_PATH), true, "不能删掉属于新 daemon 的文件");
+  assert.equal(JSON.parse(readFileSync(DAEMON_PATH, "utf8")).pid, 2222);
+
+  clearDaemonInfoFor(2222);
+  assert.equal(existsSync(DAEMON_PATH), false, "自己的文件该正常清理");
+});
+
+test("配置缺失时自动生成示例配置，已存在则原样保留", () => {
+  rmSync(CONFIG_PATH, { force: true });
+
+  assert.equal(ensureConfigFile(), true, "没有配置时应新建");
+  assert.equal(existsSync(CONFIG_PATH), true);
+  const generated = readFileSync(CONFIG_PATH, "utf8");
+  assert.match(generated, /activeProvider/);
+  assert.match(generated, /providers/);
+
+  // 已有配置（哪怕手写成最简形式）不得被覆盖
+  const custom = '{"port":8899,"providers":{"x":{"baseUrl":"u","apiKey":"k"}}}';
+  writeFileSync(CONFIG_PATH, custom);
+  assert.equal(ensureConfigFile(), false, "已有配置时不应触发 init");
+  assert.equal(readFileSync(CONFIG_PATH, "utf8"), custom, "不得覆盖已有配置");
 });

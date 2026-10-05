@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/frontend/architecture.md", "reason": "TUI 层边界与页面/焦点约定"}
+{"file": ".trellis/spec/frontend/interaction-guidelines.md", "reason": "键位、确认与反馈区约定"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "TUI 与配置的写入顺序/所有权"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "命令失败与终端恢复"}

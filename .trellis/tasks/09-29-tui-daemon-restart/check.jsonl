@@ -1,3 +1,4 @@
-{"file": ".trellis/spec/frontend/interaction-guidelines.md", "reason": "'核对交互与文案一致性'"}
-{"file": ".trellis/spec/backend/error-handling.md", "reason": "'核对重启失败/离线路径'"}
-{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "'核对质量门槛'"}
+{"file": ".trellis/spec/frontend/interaction-guidelines.md", "reason": "核对交互、键位提示与文案一致性"}
+{"file": ".trellis/spec/frontend/architecture.md", "reason": "核对 confirming 意图与新增动作的边界"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "核对重启失败/离线路径处理"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "核对质量门槛"}

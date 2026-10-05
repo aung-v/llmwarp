@@ -1,5 +1,5 @@
-{"file": ".trellis/spec/frontend/architecture.md", "reason": "'TUI"}
-{"file": ".trellis/spec/frontend/interaction-guidelines.md", "reason": "'确认交互、文案与键盘提示'"}
-{"file": ".trellis/spec/frontend/state-management.md", "reason": "'TUI"}
-{"file": ".trellis/spec/backend/error-handling.md", "reason": "'startDaemon"}
-{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "'typecheck/test/build"}
+{"file": ".trellis/spec/frontend/architecture.md", "reason": "TUI 层边界与 confirming 意图枚举约定"}
+{"file": ".trellis/spec/frontend/interaction-guidelines.md", "reason": "确认交互、文案与键盘提示约定"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "TUI 写入顺序与状态所有权（config-first）"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "startDaemon/stopDaemon 失败与守护进程离线路径"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "typecheck/test/build 质量门槛"}
