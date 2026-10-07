@@ -30,7 +30,7 @@ import {
 } from "../src/tui/model.js";
 import { renderTui, visibleWidth } from "../src/tui/render.js";
 import type { Config } from "../src/config.js";
-import { aggregate } from "../src/stats/aggregate.js";
+import { AggregateAccumulator } from "../src/stats/aggregate.js";
 import type { RequestEvent } from "../src/stats/event.js";
 
 const status: StatusSnapshot = {
@@ -711,9 +711,15 @@ function sampleStatsEvents(): RequestEvent[] {
   ];
 }
 
+const statsAggregate = (() => {
+  const accumulator = new AggregateAccumulator();
+  for (const item of sampleStatsEvents()) accumulator.add(item);
+  return accumulator.snapshot(new Date(2026, 8, 27, 12, 0, 0).getTime(), 30);
+})();
+
 const statsStatus: StatusSnapshot = {
   ...status,
-  stats: { enabled: true, retentionDays: 30, aggregate: aggregate(sampleStatsEvents()) },
+  stats: { enabled: true, retentionDays: 30, aggregate: statsAggregate },
 };
 
 test("统计页渲染按天火花线与 provider 切片，且不泄露密钥", () => {

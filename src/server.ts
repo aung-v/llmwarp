@@ -20,8 +20,7 @@ import { portInUseMessage, findPortOwner } from "./net.js";
 import { debugLog } from "./debuglog.js";
 import { classifyRoute, type RequestEvent, type RouteKind } from "./stats/event.js";
 import { StatsCollector } from "./stats/collect.js";
-import { AggregateSnapshotCache, type Aggregate } from "./stats/aggregate.js";
-import { readRange } from "./stats/store.js";
+import type { Aggregate } from "./stats/aggregate.js";
 
 export const VERSION = "1.1.0";
 const ADMIN_PREFIX = "/_llmwarp/";
@@ -29,8 +28,6 @@ const ADMIN_PREFIX = "/_llmwarp/";
 class RouterState {
   readonly metrics = new RequestMetrics();
   readonly stats: StatsCollector;
-  private readonly statsCache = new AggregateSnapshotCache();
-
   constructor(public config: Config) {
     const statsConfig = getStatsConfig(config);
     this.stats = new StatsCollector({
@@ -53,20 +50,18 @@ class RouterState {
     this.config.activeModel = model;
   }
 
-  /** 管理端 status 里的历史聚合摘要；统计关闭或读取失败时为 null。走缓存避免轮询时全量读盘。 */
-  statsSnapshot(now: number = Date.now()): StatsSnapshot {
+  /** 管理端 status 里的历史聚合摘要；统计关闭或读取失败时为 null。纯内存计算，不碰磁盘。 */
+  statsSnapshot(): StatsSnapshot {
     const statsConfig = getStatsConfig(this.config);
     if (!statsConfig.enabled) {
       return { enabled: false, retentionDays: statsConfig.retentionDays, aggregate: null };
     }
     try {
-      const value = this.statsCache.get(
-        this.stats.writeVersion,
-        statsConfig.retentionDays,
-        now,
-        () => readRange(statsConfig.retentionDays),
-      );
-      return { enabled: true, retentionDays: statsConfig.retentionDays, aggregate: value };
+      return {
+        enabled: true,
+        retentionDays: statsConfig.retentionDays,
+        aggregate: this.stats.aggregate,
+      };
     } catch {
       return { enabled: true, retentionDays: statsConfig.retentionDays, aggregate: null };
     }
@@ -310,8 +305,8 @@ export async function startServer(options: StartServerOptions = {}): Promise<Ser
   const config = loadConfig();
   const port = options.port ?? getPort(config);
   const router = new RouterState(config);
-  // 启动时清理保留期之外的统计文件；失败不影响服务。
-  if (router.stats.isEnabled) router.stats.pruneNow();
+  // 启动时清理一次保留期之外的统计文件（与采集开关无关）；失败不影响服务。
+  router.stats.pruneNow();
   const token = randomBytes(24).toString("hex");
   const startedAt = new Date().toISOString();
 

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import http from "node:http";
@@ -16,6 +16,14 @@ const { startServer } = await import("../src/server.js");
 
 const socketSkip = await skipWithoutSockets();
 
+/**
+ * 同一文件里的用例共享同一个 `CONFIG_DIR`，而统计是落盘累加的。不清掉上一个用例
+ * 写下的 JSONL，后一个用例的聚合断言就会把前面的请求也算进来。
+ */
+function resetStatsDir(): void {
+  rmSync(join(CONFIG_DIR, "stats"), { recursive: true, force: true });
+}
+
 async function freePort(): Promise<number> {
   const srv = http.createServer();
   await new Promise<void>((r) => srv.listen(0, "127.0.0.1", () => r()));
@@ -25,6 +33,7 @@ async function freePort(): Promise<number> {
 }
 
 test("代理：改写 model、注入密钥、透传 SSE、管理端点鉴权", { skip: socketSkip }, async (t) => {
+  resetStatsDir();
   const seen: { url?: string; headers: http.IncomingHttpHeaders; body: string }[] = [];
   const upstream = http.createServer((req, res) => {
     const chunks: Buffer[] = [];
@@ -164,6 +173,7 @@ test("代理：改写 model、注入密钥、透传 SSE、管理端点鉴权", {
 });
 
 test("统计：流式与非流式 usage / TTFT / 限流头，且不改变响应字节", { skip: socketSkip }, async (t) => {
+  resetStatsDir();
   const seen: { headers: http.IncomingHttpHeaders; body: string }[] = [];
   const ssePart1 = 'data: {"choices":[{"delta":{"content":"a"}}]}\n\n';
   const ssePart2 =
@@ -317,6 +327,7 @@ test("统计：流式与非流式 usage / TTFT / 限流头，且不改变响应�
 });
 
 test("统计：客户端中途断开记为失败，不沿用已发出的 2xx 状态码", { skip: socketSkip }, async (t) => {
+  resetStatsDir();
   const upstream = http.createServer((req, res) => {
     if (req.url?.includes("chat/completions")) {
       res.writeHead(200, { "content-type": "text/event-stream" });

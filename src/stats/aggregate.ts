@@ -1,9 +1,17 @@
 /**
- * 读取时聚合：不落 rollup 文件，直接对内存里的事件集合分组计算。
- * 分组键为 day × provider × model × endpoint × routeKind；视图再按需切片。
+ * 增量聚合：每条事件 O(1) 更新内存桶，快照 O(桶数) 输出。
+ *
+ * 刻意不做两件事：
+ * - 不做「读盘 -> 排序 -> 全量重算」：那会让 TUI 每 3 秒轮询 `/_llmwarp/status`
+ *   时反复解析并排序整段历史（实测 6 万事件约 120ms，阻塞事件循环）。
+ * - 不在读取时做任何 I/O：历史只在 daemon 启动后首次查询时读一次（见 `collect.ts`）。
+ *
+ * 分位数改用固定边界直方图（毫秒）：每个请求只做一次桶自增，快照时按累积计数走一遍
+ * 固定桶数即可，得到「≤ 该边界」的近似分位。代价是分位落在桶的边界上，不再精确到 1ms；
+ * 换取的是查询成本恒定。边界见 `LATENCY_BOUNDS`。
  */
 import type { RequestEvent, RouteKind } from "./event.js";
-import { dayKey, hourKey } from "./store.js";
+import { dayKey, hourKey, recentDayKeys } from "./store.js";
 
 export interface AggregateMetrics {
   requests: number;
@@ -50,12 +58,150 @@ export interface Aggregate {
   unrouted: AggregateMetrics;
 }
 
-/** 最近秩（nearest-rank）分位数：升序数组、p∈[0,100]；空集返回 0。 */
-export function percentile(sorted: number[], p: number): number {
-  if (sorted.length === 0) return 0;
-  const rank = Math.ceil((p / 100) * sorted.length);
-  const index = Math.min(Math.max(rank - 1, 0), sorted.length - 1);
-  return sorted[index];
+/** 时延 / TTFT 直方图的上边界（毫秒）。最后一桶表示「大于最大边界」。 */
+export const LATENCY_BOUNDS: readonly number[] = [
+  10, 25, 50, 75, 100, 150, 200, 300, 400, 500, 750, 1_000, 1_500, 2_000, 3_000, 4_000, 5_000, 7_500,
+  10_000, 15_000, 30_000, 60_000,
+];
+
+const HIST_SIZE = LATENCY_BOUNDS.length + 1;
+const MAX_BOUND = LATENCY_BOUNDS[LATENCY_BOUNDS.length - 1];
+
+interface Bucket {
+  requests: number;
+  errors: number;
+  streamRequests: number;
+  nonStreamRequests: number;
+  durationSum: number;
+  duration: Uint32Array;
+  ttftSamples: number;
+  ttftSum: number;
+  ttft: Uint32Array;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  cachedTokens: number;
+  reasoningTokens: number;
+  truncations: number;
+  contentFiltered: number;
+  generationMs: number;
+  generatedTokens: number;
+}
+
+interface TargetState {
+  provider: string | null;
+  model: string | null;
+  endpoint: string;
+  routeKind: RouteKind;
+  bucket: Bucket;
+}
+
+interface DayState {
+  bucket: Bucket;
+  unrouted: Bucket;
+  hours: Map<string, Bucket>;
+  targets: Map<string, TargetState>;
+}
+
+function emptyBucket(): Bucket {
+  return {
+    requests: 0,
+    errors: 0,
+    streamRequests: 0,
+    nonStreamRequests: 0,
+    durationSum: 0,
+    duration: new Uint32Array(HIST_SIZE),
+    ttftSamples: 0,
+    ttftSum: 0,
+    ttft: new Uint32Array(HIST_SIZE),
+    inputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    cachedTokens: 0,
+    reasoningTokens: 0,
+    truncations: 0,
+    contentFiltered: 0,
+    generationMs: 0,
+    generatedTokens: 0,
+  };
+}
+
+/** 返回 `value` 落入的桶下标；超过最大边界落入末尾的溢出桶。 */
+function bucketIndex(value: number): number {
+  for (let index = 0; index < LATENCY_BOUNDS.length; index += 1) {
+    if (value <= LATENCY_BOUNDS[index]) return index;
+  }
+  return LATENCY_BOUNDS.length;
+}
+
+function recordDuration(hist: Uint32Array, value: number): void {
+  hist[bucketIndex(value)] += 1;
+}
+
+function addToBucket(bucket: Bucket, event: RequestEvent): void {
+  bucket.requests += 1;
+  if (!event.ok) bucket.errors += 1;
+  if (event.stream) bucket.streamRequests += 1;
+  else bucket.nonStreamRequests += 1;
+  bucket.durationSum += event.durationMs;
+  recordDuration(bucket.duration, event.durationMs);
+  if (event.ttftMs !== null) {
+    bucket.ttftSamples += 1;
+    bucket.ttftSum += event.ttftMs;
+    recordDuration(bucket.ttft, event.ttftMs);
+  }
+  if (event.finishReason === "length") bucket.truncations += 1;
+  if (event.finishReason === "content_filter") bucket.contentFiltered += 1;
+
+  const usage = event.usage;
+  if (!usage) return;
+  bucket.inputTokens += usage.input;
+  bucket.outputTokens += usage.output;
+  bucket.totalTokens += usage.total;
+  bucket.cachedTokens += usage.cached ?? 0;
+  bucket.reasoningTokens += usage.reasoning ?? 0;
+  if (usage.output > 0) {
+    const generation = event.ttftMs !== null ? Math.max(event.durationMs - event.ttftMs, 0) : event.durationMs;
+    if (generation > 0) {
+      bucket.generationMs += generation;
+      bucket.generatedTokens += usage.output;
+    }
+  }
+}
+
+function mergeInto(target: Bucket, source: Bucket): void {
+  target.requests += source.requests;
+  target.errors += source.errors;
+  target.streamRequests += source.streamRequests;
+  target.nonStreamRequests += source.nonStreamRequests;
+  target.durationSum += source.durationSum;
+  target.ttftSamples += source.ttftSamples;
+  target.ttftSum += source.ttftSum;
+  target.inputTokens += source.inputTokens;
+  target.outputTokens += source.outputTokens;
+  target.totalTokens += source.totalTokens;
+  target.cachedTokens += source.cachedTokens;
+  target.reasoningTokens += source.reasoningTokens;
+  target.truncations += source.truncations;
+  target.contentFiltered += source.contentFiltered;
+  target.generationMs += source.generationMs;
+  target.generatedTokens += source.generatedTokens;
+  for (let index = 0; index < HIST_SIZE; index += 1) {
+    target.duration[index] += source.duration[index];
+    target.ttft[index] += source.ttft[index];
+  }
+}
+
+/** 直方图分位：按累积计数走到 rank 所在的桶，返回该桶的上边界。 */
+export function histogramPercentile(hist: Uint32Array, total: number, p: number): number {
+  if (total <= 0) return 0;
+  const rank = Math.ceil((p / 100) * total);
+  let cumulative = 0;
+  for (let index = 0; index < hist.length; index += 1) {
+    cumulative += hist[index];
+    if (cumulative >= rank) return index < LATENCY_BOUNDS.length ? LATENCY_BOUNDS[index] : MAX_BOUND;
+  }
+  return MAX_BOUND;
 }
 
 function round(value: number, digits = 0): number {
@@ -63,166 +209,132 @@ function round(value: number, digits = 0): number {
   return Math.round(value * factor) / factor;
 }
 
-function computeMetrics(events: RequestEvent[]): AggregateMetrics {
-  const durations: number[] = [];
-  const ttfts: number[] = [];
-  let errors = 0;
-  let inputTokens = 0;
-  let outputTokens = 0;
-  let totalTokens = 0;
-  let cachedTokens = 0;
-  let reasoningTokens = 0;
-  let truncations = 0;
-  let contentFiltered = 0;
-  let streamRequests = 0;
-  let nonStreamRequests = 0;
-  let generationMs = 0;
-  let generatedTokens = 0;
-
-  for (const event of events) {
-    durations.push(event.durationMs);
-    if (!event.ok) errors += 1;
-    if (event.stream) streamRequests += 1;
-    else nonStreamRequests += 1;
-    if (event.ttftMs !== null) ttfts.push(event.ttftMs);
-    if (event.finishReason === "length") truncations += 1;
-    if (event.finishReason === "content_filter") contentFiltered += 1;
-
-    const usage = event.usage;
-    if (usage) {
-      inputTokens += usage.input;
-      outputTokens += usage.output;
-      totalTokens += usage.total;
-      cachedTokens += usage.cached ?? 0;
-      reasoningTokens += usage.reasoning ?? 0;
-      if (usage.output > 0) {
-        const generation =
-          event.ttftMs !== null ? Math.max(event.durationMs - event.ttftMs, 0) : event.durationMs;
-        if (generation > 0) {
-          generationMs += generation;
-          generatedTokens += usage.output;
-        }
-      }
-    }
-  }
-
-  durations.sort((a, b) => a - b);
-  ttfts.sort((a, b) => a - b);
-  const totalDuration = durations.reduce((sum, value) => sum + value, 0);
-
+function metricsOf(bucket: Bucket): AggregateMetrics {
   return {
-    requests: events.length,
-    errors,
-    errorRate: events.length > 0 ? round(errors / events.length, 4) : 0,
-    avgDurationMs: events.length > 0 ? round(totalDuration / events.length) : 0,
-    p50DurationMs: round(percentile(durations, 50)),
-    p95DurationMs: round(percentile(durations, 95)),
-    avgTtftMs:
-      ttfts.length > 0 ? round(ttfts.reduce((sum, value) => sum + value, 0) / ttfts.length) : 0,
-    p95TtftMs: round(percentile(ttfts, 95)),
-    ttftSamples: ttfts.length,
-    inputTokens,
-    outputTokens,
-    totalTokens,
-    cachedTokens,
-    reasoningTokens,
+    requests: bucket.requests,
+    errors: bucket.errors,
+    errorRate: bucket.requests > 0 ? round(bucket.errors / bucket.requests, 4) : 0,
+    avgDurationMs: bucket.requests > 0 ? round(bucket.durationSum / bucket.requests) : 0,
+    p50DurationMs: histogramPercentile(bucket.duration, bucket.requests, 50),
+    p95DurationMs: histogramPercentile(bucket.duration, bucket.requests, 95),
+    avgTtftMs: bucket.ttftSamples > 0 ? round(bucket.ttftSum / bucket.ttftSamples) : 0,
+    p95TtftMs: histogramPercentile(bucket.ttft, bucket.ttftSamples, 95),
+    ttftSamples: bucket.ttftSamples,
+    inputTokens: bucket.inputTokens,
+    outputTokens: bucket.outputTokens,
+    totalTokens: bucket.totalTokens,
+    cachedTokens: bucket.cachedTokens,
+    reasoningTokens: bucket.reasoningTokens,
     outputTokensPerSecond:
-      generationMs > 0 ? round(generatedTokens / (generationMs / 1000), 2) : null,
-    truncations,
-    contentFiltered,
-    streamRequests,
-    nonStreamRequests,
+      bucket.generationMs > 0 ? round(bucket.generatedTokens / (bucket.generationMs / 1000), 2) : null,
+    truncations: bucket.truncations,
+    contentFiltered: bucket.contentFiltered,
+    streamRequests: bucket.streamRequests,
+    nonStreamRequests: bucket.nonStreamRequests,
   };
 }
 
-function groupEvents(
-  events: RequestEvent[],
-  keyOf: (event: RequestEvent) => string,
-): Map<string, RequestEvent[]> {
-  const groups = new Map<string, RequestEvent[]>();
-  for (const event of events) {
-    const key = keyOf(event);
-    const existing = groups.get(key);
-    if (existing) existing.push(event);
-    else groups.set(key, [event]);
-  }
-  return groups;
-}
-
-export function aggregate(events: RequestEvent[]): Aggregate {
-  const days: DayAggregate[] = [...groupEvents(events, (event) => dayKey(event.ts)).entries()]
-    .map(([day, group]) => ({ ...computeMetrics(group), day }))
-    .sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0));
-
-  const hours: HourAggregate[] = [...groupEvents(events, (event) => hourKey(event.ts)).entries()]
-    .map(([hour, group]) => ({ ...computeMetrics(group), hour }))
-    .sort((a, b) => (a.hour < b.hour ? -1 : a.hour > b.hour ? 1 : 0));
-
-  const targets: TargetAggregate[] = [
-    ...groupEvents(
-      events,
-      (event) =>
-        [event.provider ?? "\u0000", event.model ?? "\u0000", event.endpoint, event.routeKind].join(
-          "\u0001",
-        ),
-    ).values(),
-  ]
-    .map((group) => {
-      const first = group[0];
-      return {
-        ...computeMetrics(group),
-        provider: first.provider,
-        model: first.model,
-        endpoint: first.endpoint,
-        routeKind: first.routeKind,
-      };
-    })
-    .sort(
-      (a, b) =>
-        b.requests - a.requests ||
-        (a.provider ?? "").localeCompare(b.provider ?? "") ||
-        (a.model ?? "").localeCompare(b.model ?? "") ||
-        a.endpoint.localeCompare(b.endpoint),
-    );
-
-  return {
-    overall: computeMetrics(events),
-    days,
-    hours,
-    targets,
-    unrouted: computeMetrics(events.filter((event) => event.routeKind === "unrouted")),
-  };
-}
-
-export interface AggregateCacheEntry {
-  version: number;
-  retentionDays: number;
-  at: number;
-  aggregate: Aggregate;
+function targetKey(event: RequestEvent): string {
+  return [event.provider ?? "\u0000", event.model ?? "\u0000", event.endpoint, event.routeKind].join("\u0001");
 }
 
 /**
- * 历史聚合缓存：落盘写入计数（version）不变时复用上次结果，避免 TUI 每 3 秒
- * 轮询 `/_llmwarp/status` 时反复全量读取 JSONL 并重排；版本变化时立即重算，
- * 另设 maxAgeMs 兜底外部写入。`load` 由调用方注入，保持本模块不依赖文件系统。
+ * 内存累加器：`add` 为 O(1)，`snapshot` 为 O(保留期内的桶数)（默认约 30 天 × 24 小时 + 目标数）。
+ * 快照时顺带丢弃保留期之外的天，内存不会无限增长。
  */
-export class AggregateSnapshotCache {
-  private entry: AggregateCacheEntry | null = null;
+export class AggregateAccumulator {
+  private readonly days = new Map<string, DayState>();
 
-  constructor(private readonly maxAgeMs = 30_000) {}
-
-  get(version: number, retentionDays: number, now: number, load: () => RequestEvent[]): Aggregate {
-    const cached = this.entry;
-    if (
-      cached &&
-      cached.retentionDays === retentionDays &&
-      cached.version === version &&
-      now - cached.at < this.maxAgeMs
-    ) {
-      return cached.aggregate;
+  add(event: RequestEvent): void {
+    const day = dayKey(event.ts);
+    let state = this.days.get(day);
+    if (!state) {
+      state = { bucket: emptyBucket(), unrouted: emptyBucket(), hours: new Map(), targets: new Map() };
+      this.days.set(day, state);
     }
-    const value = aggregate(load());
-    this.entry = { version, retentionDays, at: now, aggregate: value };
-    return value;
+    addToBucket(state.bucket, event);
+    if (event.routeKind === "unrouted") addToBucket(state.unrouted, event);
+
+    const hour = hourKey(event.ts);
+    let hourBucket = state.hours.get(hour);
+    if (!hourBucket) {
+      hourBucket = emptyBucket();
+      state.hours.set(hour, hourBucket);
+    }
+    addToBucket(hourBucket, event);
+
+    const key = targetKey(event);
+    let target = state.targets.get(key);
+    if (!target) {
+      target = {
+        provider: event.provider,
+        model: event.model,
+        endpoint: event.endpoint,
+        routeKind: event.routeKind,
+        bucket: emptyBucket(),
+      };
+      state.targets.set(key, target);
+    }
+    addToBucket(target.bucket, event);
+  }
+
+  /** 已跟踪的天数（保留期内）。 */
+  get trackedDays(): number {
+    return this.days.size;
+  }
+
+  snapshot(now: number = Date.now(), retentionDays = 30): Aggregate {
+    const keep = recentDayKeys(retentionDays, now);
+    const overall = emptyBucket();
+    const unrouted = emptyBucket();
+    const targets = new Map<string, TargetState>();
+    const days: DayAggregate[] = [];
+    const hours: HourAggregate[] = [];
+
+    const orderedDays = [...this.days.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+    for (const [day, state] of orderedDays) {
+      if (!keep.has(day)) {
+        this.days.delete(day);
+        continue;
+      }
+      mergeInto(overall, state.bucket);
+      mergeInto(unrouted, state.unrouted);
+      days.push({ ...metricsOf(state.bucket), day });
+      for (const [hour, bucket] of state.hours) hours.push({ ...metricsOf(bucket), hour });
+      for (const [key, target] of state.targets) {
+        let accumulated = targets.get(key);
+        if (!accumulated) {
+          accumulated = {
+            provider: target.provider,
+            model: target.model,
+            endpoint: target.endpoint,
+            routeKind: target.routeKind,
+            bucket: emptyBucket(),
+          };
+          targets.set(key, accumulated);
+        }
+        mergeInto(accumulated.bucket, target.bucket);
+      }
+    }
+
+    hours.sort((a, b) => (a.hour < b.hour ? -1 : a.hour > b.hour ? 1 : 0));
+
+    const targetList: TargetAggregate[] = [...targets.values()]
+      .map((target) => ({
+        ...metricsOf(target.bucket),
+        provider: target.provider,
+        model: target.model,
+        endpoint: target.endpoint,
+        routeKind: target.routeKind,
+      }))
+      .sort(
+        (a, b) =>
+          b.requests - a.requests ||
+          (a.provider ?? "").localeCompare(b.provider ?? "") ||
+          (a.model ?? "").localeCompare(b.model ?? "") ||
+          a.endpoint.localeCompare(b.endpoint),
+      );
+
+    return { overall: metricsOf(overall), days, hours, targets: targetList, unrouted: metricsOf(unrouted) };
   }
 }

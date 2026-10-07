@@ -29,7 +29,7 @@ export function hourKey(ts: number): string {
 }
 
 /** 最近 days 个自然日（含今天）的日期键集合，按本地时区切天。 */
-function recentDayKeys(days: number, now: number): Set<string> {
+export function recentDayKeys(days: number, now: number): Set<string> {
   const keys = new Set<string>();
   const base = new Date(now);
   base.setHours(0, 0, 0, 0);

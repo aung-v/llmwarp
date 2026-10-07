@@ -83,7 +83,7 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 - 路由模式在「路由」页选择（`按客户端请求` / `统一用当前模型`）；状态区始终显示当前模式
 - 「供应商」页支持管理供应商：`Enter` 选中项进入现有的 `llmwarp edit` 流程，`[ + 添加供应商 ]` 进入 `llmwarp add`，`[ - 删除 … ]` 二次确认后调用 `llmwarp remove`。这些流程会临时离开 TUI 用原来的交互跑（`$EDITOR`、多选都可用），跑完按任意键返回 TUI 并刷新
 - 守护进程栏的按钮运行中显示「重启 daemon」、离线时显示「启动 daemon」；必须先聚焦到按钮再按 `Enter`，不存在按一个键就直接重启的路径。重启确认会提示会中断进行中的 `/v1` 请求
-- 「统计」页按天展示 token 用量火花线（`Enter` 在 token / 请求数之间切换），并按 provider / model / endpoint 列出请求数、错误率、平均与 p95 延迟；`↑`/`↓` 可按 routeKind 过滤（含「被开关覆盖」与「路由失败」）。统计落在 `~/.config/llmwarp/stats/YYYY-MM-DD.jsonl`，跨 daemon 重启保留，默认保留 30 天（`stats.retentionDays` 可配；`stats.enabled=false` 完全关闭采集并停止注入 `stream_options`）
+- 「统计」页按天展示 token 用量火花线（`Enter` 在 token / 请求数之间切换），并按 provider / model / endpoint 列出请求数、错误率、平均与 p95 延迟；`↑`/`↓` 可按 routeKind 过滤（含「被开关覆盖」与「路由失败」）。统计落在 `~/.config/llmwarp/stats/YYYY-MM-DD.jsonl`，跨 daemon 重启保留，默认保留 30 天（`stats.retentionDays` 可配；`stats.enabled=false` 完全关闭采集并停止注入 `stream_options`）。过期文件只在 daemon 启动时清理一次，运行期没有任何定时或轮询触发的扫盘/读盘
 - `r` 手动刷新（默认每 3 秒自动刷新）
 - `q` 或 `Ctrl-C` 退出（退出不影响后台守护进程）
 

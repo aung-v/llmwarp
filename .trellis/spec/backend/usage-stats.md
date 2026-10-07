@@ -22,16 +22,17 @@
 - `src/stats/store.ts`
   - `STATS_DIR = join(CONFIG_DIR, "stats")`
   - `dayKey(ts): string`, `hourKey(ts): string`
+  - `recentDayKeys(days, now): Set<string>` (the retention-window day keys)
   - `appendEvent(event, dir = STATS_DIR): boolean`
   - `readRange(days, dir = STATS_DIR, now = Date.now()): RequestEvent[]`
   - `prune(retentionDays, dir = STATS_DIR, now = Date.now()): string[]`
 - `src/stats/collect.ts`
-  - `new StatsCollector({ enabled, retentionDays, dir?, now?, pruneIntervalMs? })`
-  - `isEnabled: boolean`, `retention: number`, `writeVersion: number`, `record(event): void`, `pruneNow(at?): string[]`, `configure({ enabled, retentionDays }): void`
+  - `new StatsCollector({ enabled, retentionDays, dir?, now? })`
+  - `isEnabled: boolean`, `retention: number`, `aggregate: Aggregate`, `record(event): void`, `pruneNow(at?): string[]`, `configure({ enabled, retentionDays }): void`
 - `src/stats/aggregate.ts`
-  - `aggregate(events: RequestEvent[]): Aggregate` -> `{ overall, days, hours, targets, unrouted }`
-  - `percentile(sorted: number[], p: number): number` (nearest-rank)
-  - `new AggregateSnapshotCache(maxAgeMs = 30_000).get(version, retentionDays, now, load)`
+  - `new AggregateAccumulator()`, `.add(event): void`, `.snapshot(now?, retentionDays?): Aggregate` -> `{ overall, days, hours, targets, unrouted }`, `.trackedDays: number`
+  - `histogramPercentile(hist: Uint32Array, total: number, p: number): number`
+  - `LATENCY_BOUNDS: readonly number[]` (ms bucket upper edges)
 - `src/proxy.ts`
   - `proxyRequest(req, res, { upstreamUrl, apiKey, model, body?, startedAt?, includeUsage?, observer? })`
   - `observer(observation: UpstreamObservation)` is called at most once per response, after the body ends.
@@ -41,7 +42,9 @@
 ### 3. Contracts
 
 - **Storage**: one file per local day at `<CONFIG_DIR>/stats/YYYY-MM-DD.jsonl`, one `RequestEvent` per line. Directory `0o700`, files `0o600`. `appendEvent` returns `false` on any failure and never throws; a write failure must not change the request path.
-- **Retention**: `prune(retentionDays)` deletes day files outside the retention window; `pruneNow()` runs at daemon startup and then at most once per `pruneIntervalMs`.
+- **Retention**: `prune(retentionDays)` deletes whole day files outside the retention window. `pruneNow()` is called **exactly once, at daemon startup**, and runs regardless of `stats.enabled`; there is no hourly timer and no request-triggered cleanup.
+- **No periodic work**: the runtime must not scan or read the stats directory on a schedule. History is loaded from JSONL at most once per process (lazily, on the first `record`/`aggregate` when enabled) and fed into `AggregateAccumulator`. Per request the collector only appends one line and updates in-memory buckets; `/_llmwarp/status` is a pure in-memory snapshot.
+- **Percentiles are bucketed**: `p50DurationMs` / `p95DurationMs` / `p95TtftMs` come from a fixed-boundary histogram and report the bucket's **upper edge** ("≤ N ms"), not an exact sample. Averages (`avgDurationMs`, `avgTtftMs`) stay exact because the running sum is kept.
 - **Injection**: `stream_options.include_usage=true` is added only when stats are enabled **and** the request body is JSON **and** `stream === true` **and** the path is `/v1/chat/completions`. Non-JSON, array, or absent bodies pass through untouched.
 - **Attribution**: the statistics key is the **resolved upstream target** (`providerName` / `model` from `resolveModelRoute`), never the client string, because `warp` is a moving alias.
 
@@ -69,7 +72,7 @@
 | Response body larger than the capture cap (1 MB non-stream, 1 MB pending SSE line) | capture is dropped; request still recorded without usage |
 | Client aborts mid-stream | `status: null`, `ok: false`; no `usage` / `ttftMs` |
 | Request-body read fails | recorded as `status: 400`, `ok: false` |
-| `stats.enabled = false` | no injection, no JSONL write; the pre-existing in-memory `metrics` window still records |
+| `stats.enabled = false` | no injection, no JSONL write, `stats.aggregate: null`; startup cleanup still runs, and the pre-existing in-memory `metrics` window still records |
 | `/_llmwarp/status` read/aggregate throws | `stats.aggregate: null`, HTTP 200 still returned |
 
 ### 5. Good/Base/Bad Cases
@@ -84,10 +87,10 @@
 
 - `test/stats-event.test.ts`: `parseUsage` for both `prompt_tokens/completion_tokens` and `input_tokens/output_tokens`, cached/reasoning details, missing/illegal values -> `null`; `parseRateLimitHeaders` for requests vs tokens variants and `1s`/`6m0s`/`100ms` resets; `classifyRoute` for all five kinds.
 - `test/stats-store.test.ts`: append/read round-trip, per-day splitting, corrupted line skipped, retention deletes only out-of-window files, write failures return `false`.
-- `test/stats-aggregate.test.ts`: error rate, p50/p95 nearest-rank, token sums, `outputTokensPerSecond`, `unrouted` separation, cache reuse on unchanged version and recompute on version / `maxAge` / retention change.
+- `test/stats-aggregate.test.ts`: error rate, bucketed p50/p95 (assert the bucket edge, e.g. a lone 42 ms sample reports 50), token sums, `outputTokensPerSecond`, `unrouted` separation, and that `snapshot` drops days outside the retention window (accumulator does not grow unbounded).
 - `test/routing-stats.test.ts`: `warp`, `explicit`, `overridden`, `unrouted`, and `/v1/models` producing no event; `unrouted` excluded from provider denominators.
 - `test/proxy.test.ts`: SSE stays incremental — read with `res.body.getReader()` and assert the second chunk arrives **after** the first; `await res.text()` is not acceptable. Plus TTFT on first chunk, usage from the final chunk, and the no-usage fallback.
-- `test/server.test.ts`: status snapshot carries `stats`; client abort mid-stream records `ok: false` / `status: null`.
+- `test/server.test.ts`: status snapshot carries `stats`; client abort mid-stream records `ok: false` / `status: null`. Tests that assert on the persisted aggregate must reset `<CONFIG_DIR>/stats` first, because tests in one file share `CONFIG_DIR` and the JSONL record accumulates.
 
 ### 7. Wrong vs Correct
 
@@ -105,4 +108,25 @@ event.provider = requestedModel?.split("/")[0] ?? null;
 routeKind = classifyRoute(bodyInfo.requestedModel, route, routingMode);
 providerName = route.providerName;
 model = route.model ?? null;
+```
+
+#### Wrong
+
+```ts
+// src/stats/collect.ts: recompute the whole aggregate from disk on every status read.
+// The TUI polls every 3s, so under traffic this re-parses and re-sorts the whole
+// retention window each time (~118ms at 60k events) and blocks the event loop.
+get aggregate() {
+  return aggregate(readRange(this.retentionDays));
+}
+```
+
+#### Correct
+
+```ts
+// src/stats/collect.ts: read history once, then update buckets per event.
+get aggregate(): Aggregate {
+  this.seed(); // no-op after the first call
+  return this.accumulator.snapshot(this.now(), this.retentionDays);
+}
 ```
