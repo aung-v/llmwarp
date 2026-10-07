@@ -181,3 +181,25 @@ Built the self-use statistics feature for llmwarp. An observable proxy pipeline 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 8: Make runtime stats collection O(1) and prune only at startup
+<!-- trellis-session: v=2 fp=a749975e7d50e572 -->
+
+**Date**: 2026-10-07
+**Task**: Make runtime stats collection O(1) and prune only at startup
+**Branch**: `master`
+
+### Summary
+
+Follow-up to the stats feature, done outside a Trellis task at the user's request: remove every periodic runtime action. The read-on-every-poll aggregation is replaced by an in-memory incremental accumulator that is fed from the per-day JSONL at most once per process, so /_llmwarp/status is now a pure memory snapshot (0.085ms at 60k events, previously ~118ms of blocking read+parse+sort on every 3s TUI poll) and each request only appends a line (~3.8us) and updates buckets (~0.8us). Percentiles moved to a fixed-boundary histogram reporting the bucket upper edge; averages stay exact. The request-path throttled prune was deleted entirely: cleanup now runs exactly once at daemon startup and regardless of stats.enabled, leaving no timer, no schedule and no request-triggered disk scan anywhere in the runtime. Also fixed order-dependent stats tests: the three cases in test/server.test.ts share CONFIG_DIR, so the persisted JSONL accumulated across cases and broke the aggregate assertions; a per-test stats-dir reset was added. That defect predated the follow-up and was masked because the sub-agent sandbox skipped the socket-gated tests. Verified: typecheck, build, 135/135 tests with 0 skipped.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8de68d3` | perf(stats): O(1) runtime stats and startup-only cleanup |
+
+### Status
+
+[OK] **Completed**
