@@ -612,14 +612,22 @@ export function renderTui(
       // 余下的高度留给右下角的「反馈 / 请求活动」面板。
       Math.min(mainHeight, 12),
     );
-    const activityHeight = Math.max(mainHeight - daemonPanel.length, 5);
-    const activityPanel = panel(
-      "反馈 / 请求活动",
-      activityRows(state, activityHeight - 2, rightWidth),
-      rightWidth,
-      activityHeight,
-    );
-    body = sideBySide(listPanel, [...daemonPanel, ...activityPanel]);
+    // 反馈面板至少要有「边框 + 1 行内容」才算一块面板，否则整帧会高于终端：
+    // 写满 height 行之后终端会滚动，ESC[H 重绘就整体错位（曾表现为确认框弹出时整屏花）。
+    const activityHeight = mainHeight - daemonPanel.length;
+    const rightPanel =
+      activityHeight >= 3
+        ? [
+            ...daemonPanel,
+            ...panel(
+              "反馈 / 请求活动",
+              activityRows(state, activityHeight - 2, rightWidth),
+              rightWidth,
+              activityHeight,
+            ),
+          ]
+        : daemonPanel;
+    body = sideBySide(listPanel, rightPanel);
   }
 
   const keyHint = state.switching
@@ -647,5 +655,12 @@ export function renderTui(
       ? panel(noticeTitle, notice, width, notice.length + 2)
       : [];
 
-  return [...header, ...body, ...noticeRows, ...footer].join("\n");
+  // 整帧重绘靠「每行等宽 + 行数不超 height」：draw() 是 ESC[H + 帧 + ESC[J，ED 0
+  // 只擦除光标之后的内容，擦不掉同一行光标之前的旧尾巴；而写满 height 行会让终端
+  // 滚动、整屏错位。把每行补齐/截断到 width，并在超高的极端情况下从 body 截掉多余
+  // 行（页脚与确认框永远保留），下一帧就会逐格覆盖上一帧。
+  const maxBody = Math.max(height - header.length - noticeRows.length - footer.length, 0);
+  return [...header, ...body.slice(0, maxBody), ...noticeRows, ...footer]
+    .map((line) => pad(line, width))
+    .join("\n");
 }
