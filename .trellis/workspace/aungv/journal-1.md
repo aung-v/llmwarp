@@ -307,3 +307,39 @@ Follow-up to the stats feature, done outside a Trellis task at the user's reques
 ### Next Steps
 
 - TUI 重启反馈 bug：重启期间仍显示「处理中」
+
+
+## Session 13: TUI 重启反馈竞态：陈旧刷新覆盖在途动作
+<!-- trellis-session: v=2 fp=caa789acebdfd8e9 -->
+
+**Date**: 2026-10-07
+**Task**: TUI 重启反馈竞态：陈旧刷新覆盖在途动作
+**Branch**: `master`
+
+### Summary
+
+修掉重启后界面卡在「处理中」、无法判断是否成功的竞态
+
+### Main Changes
+
+- refresh() 记录起始状态，I/O 返回后若 state 已被用户动作替换则放弃写回（错误信息同样不覆盖）
+- 切换/路由/重启/挂起命令结束都先 draw() 再 refresh(label)，结果同时进反馈区与页脚
+- spec：刷新不得覆盖更新的用户状态、动作结束必须立刻重绘、结果双通道
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f54350a` | fix(tui): stop a stale refresh from clearing an in-flight action |
+
+### Testing
+
+- [OK] 新增回归测试：重启动作结束清除「处理中」并留下成功事件（163 tests 全绿）
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 用户需重启 8787 daemon 才能加载 628e41a 起的统计修复

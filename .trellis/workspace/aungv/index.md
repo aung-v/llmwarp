@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 12
+- **Total Sessions**: 13
 - **Last Active**: 2026-10-07
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~309 | Active |
+| `journal-1.md` | ~345 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 13 | 2026-10-07 | TUI 重启反馈竞态：陈旧刷新覆盖在途动作 | `f54350a` | `master` |
 | 12 | 2026-10-07 | 统计指标出口矩阵：选中目标详情 + 小时火花线 + spec 契约 | `d25ef00` | `master` |
 | 11 | 2026-10-07 | Restrict statistics to upstream requests | `28c1568` | `master` |
 | 10 | 2026-10-07 | Fix latency and throughput metric semantics | `fb71763` | `master` |
