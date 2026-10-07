@@ -269,3 +269,41 @@ Follow-up to the stats feature, done outside a Trellis task at the user's reques
 ### Status
 
 [OK] **Completed**
+
+
+## Session 12: 统计指标出口矩阵：选中目标详情 + 小时火花线 + spec 契约
+<!-- trellis-session: v=2 fp=12e6a99334944b34 -->
+
+**Date**: 2026-10-07
+**Task**: 统计指标出口矩阵：选中目标详情 + 小时火花线 + spec 契约
+**Branch**: `master`
+
+### Summary
+
+把「算了但看不到」的统计指标补上出口，并在 spec 里写成契约
+
+### Main Changes
+
+- 统计页新增选中目标详情，展示 AggregateMetrics 全部 20 个字段
+- 目标表格新增路由列；火花线支持按天/按小时（hours[] 终于有消费者）
+- 键位：↑↓ 选目标、f 切过滤、h 切粒度；refresh 用 restoreStatsView 保留视图状态
+- usage-stats.md 增加「指标 × 维度 × 出口」矩阵 + rateLimit 豁免；前端三份 spec 同步
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d25ef00` | feat(stats): give every collected metric a display outlet |
+
+### Testing
+
+- [OK] npm run typecheck / npm run build / npm test 全绿（162 tests）
+- [OK] 矩阵与 AggregateMetrics 字段集合一一对应的断言，防止以后加字段不补出口
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- TUI 重启反馈 bug：重启期间仍显示「处理中」
