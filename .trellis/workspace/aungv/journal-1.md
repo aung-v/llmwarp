@@ -343,3 +343,37 @@ Follow-up to the stats feature, done outside a Trellis task at the user's reques
 ### Next Steps
 
 - 用户需重启 8787 daemon 才能加载 628e41a 起的统计修复
+
+
+## Session 14: 统计表格 tok/s 列 + 大数 k/M + 分位白话化
+<!-- trellis-session: v=2 fp=fb733cbf860db380 -->
+
+**Date**: 2026-10-07
+**Task**: 统计表格 tok/s 列 + 大数 k/M + 分位白话化
+**Branch**: `master`
+
+### Summary
+
+让表格直接给出反映上游健康的 TTFT / tok/s，并把大数与 jargon 的可读性问题一次解决
+
+### Main Changes
+
+- 目标表格新增 tok/s 列，总耗时 p95 移出表格（保留汇总行与详情）
+- formatCount：计数类与 token 类折算 k/M/G，1 位小数去多余 .0
+- p50/p95 → 50分位/95分位；窄终端隐藏端点列保住数值列
+- usage-stats 出口矩阵与 interaction-guidelines 同步（含大数格式化规则）
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6c48812` | feat(stats): show tok/s in the target table and fold big numbers into k/M |
+
+### Testing
+
+- [OK] 166 tests 全绿；formatCount 边界、表格列构成、窄终端让位、大数折算均有回归
+- [OK] 用本机真实 stats（296 请求 / 35.7M token）在 120/100/80/72 列宽下渲染，无溢出
+
+### Status
+
+[OK] **Completed**
