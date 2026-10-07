@@ -14,6 +14,7 @@ This project has a backend/CLI core and a terminal frontend. There is no databas
 | [Error Handling](./error-handling.md) | CLI, HTTP, configuration, and upstream failure patterns |
 | [Logging Guidelines](./logging-guidelines.md) | Current output behavior and secret-handling rules |
 | [Model Routing and Catalog](./model-routing.md) | `warp` alias, `{provider}/{model}` routing, `useClientModel`, `/v1/models` |
+| [Usage Statistics](./usage-stats.md) | `/v1` usage/performance/reliability events, JSONL persistence, aggregation, attribution |
 | [Quality Guidelines](./quality-guidelines.md) | Testing, type checking, and review expectations |
 | [Database Guidelines](./database-guidelines.md) | Why persistence changes need an explicit design |
 

@@ -1,0 +1,10 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "质量与测试门槛、受限环境跳过约定"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "校验错误处理与降级是否符合规范"}
+{"file": ".trellis/spec/backend/model-routing.md", "reason": "校验统计归属是否与路由语义一致"}
+{"file": ".trellis/spec/backend/index.md", "reason": "backend 规范索引"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "TUI 变更的质量与手工检查期望"}
+{"file": ".trellis/spec/frontend/interaction-guidelines.md", "reason": "校验统计页按键与导航不回归"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "frontend 规范索引"}
+{"file": ".trellis/spec/guides/index.md", "reason": "思考指南索引"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "校验跨层数据流与契约一致性"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "校验是否复用 metrics/聚合而非重复实现"}

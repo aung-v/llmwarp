@@ -9,6 +9,9 @@ import {
   resolveActive,
   isValidProviderName,
   isValidModelName,
+  normalizeStatsConfig,
+  getStatsConfig,
+  DEFAULT_STATS_CONFIG,
   type Config,
 } from "../src/config.js";
 
@@ -116,4 +119,33 @@ test("isValidModelName 拒绝空、空白与控制字符，允许 / 与 Unicode"
   for (const good of ["deepseek-chat", "meta/llama-3", "my.model.v1:x", "模型·测试"]) {
     assert.equal(isValidModelName(good), true, `应接受 ${JSON.stringify(good)}`);
   }
+});
+
+test("normalizeStatsConfig 补齐默认值并对非法值回退", () => {
+  assert.deepEqual(normalizeStatsConfig(undefined), { enabled: true, retentionDays: 30 });
+  assert.deepEqual(normalizeStatsConfig({}), { enabled: true, retentionDays: 30 });
+  assert.deepEqual(normalizeStatsConfig({ enabled: false, retentionDays: 7 }), {
+    enabled: false,
+    retentionDays: 7,
+  });
+  // 非法 retentionDays（负 / 0 / NaN / 字符串 / 小数）回退到默认 30
+  for (const bad of [-5, 0, Number.NaN, "10", null, {}]) {
+    assert.equal(normalizeStatsConfig({ retentionDays: bad }).retentionDays, DEFAULT_STATS_CONFIG.retentionDays);
+  }
+  assert.equal(normalizeStatsConfig({ retentionDays: 12.9 }).retentionDays, 12);
+  // 非法 enabled 回退 true
+  assert.equal(normalizeStatsConfig({ enabled: "yes" }).enabled, true);
+});
+
+test("getStatsConfig 在缺省时返回完整默认配置", () => {
+  const config: Config = { providers: { a: { baseUrl: "http://x/v1", apiKey: "k" } } };
+  assert.deepEqual(getStatsConfig(config), DEFAULT_STATS_CONFIG);
+  assert.deepEqual(getStatsConfig({ ...config, stats: { enabled: false, retentionDays: 3 } }), {
+    enabled: false,
+    retentionDays: 3,
+  });
+  // 返回副本，改动结果不影响默认常量
+  const resolved = getStatsConfig(config);
+  resolved.enabled = false;
+  assert.equal(DEFAULT_STATS_CONFIG.enabled, true);
 });

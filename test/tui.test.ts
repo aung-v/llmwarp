@@ -16,14 +16,22 @@ import {
   focusNext,
   focusPrev,
   moveSelection,
+  parseStatusSnapshot,
   pushEvent,
   selectedProvider,
+  selectedStatsFilter,
+  STATS_FILTERS,
+  toggleStatsMetric,
+  TUI_PAGES,
   type StatusSnapshot,
   type ProviderSummary,
+  type TuiPage,
   type TuiState,
 } from "../src/tui/model.js";
 import { renderTui, visibleWidth } from "../src/tui/render.js";
 import type { Config } from "../src/config.js";
+import { aggregate } from "../src/stats/aggregate.js";
+import type { RequestEvent } from "../src/stats/event.js";
 
 const status: StatusSnapshot = {
   active: { provider: "ark", model: "glm-5.3-flash" },
@@ -32,6 +40,7 @@ const status: StatusSnapshot = {
   startedAt: "2026-09-27T00:00:00.000Z",
   version: "1.0.0",
   metrics: null,
+  stats: null,
 };
 
 const config: Config = {
@@ -50,9 +59,16 @@ function openRoutingPage(state: TuiState): TuiState {
   return moveSelection(focusNext(focusPrev(state)), 1);
 }
 
-/** 切到供应商页：← 到导航栏 → ←（回到上一页=供应商）→ ↓ 把焦点落回列表。 */
+/** 按导航顺序切到指定页并把焦点落回列表；不依赖页数，新增页面也不会失效。 */
+function openPage(state: TuiState, target: TuiPage): TuiState {
+  let next = focusPrev(state); // list → nav
+  while (next.page !== target) next = focusNext(next);
+  return moveSelection(next, 1); // nav → list
+}
+
+/** 切到供应商页。 */
 function openProvidersPage(state: TuiState): TuiState {
-  return moveSelection(focusPrev(focusPrev(state)), 1);
+  return openPage(state, "providers");
 }
 
 const providerList: ProviderSummary[] = [
@@ -605,17 +621,213 @@ test("挂起动作结束必须清除在途标志并写入结果（删除路径�
   assert.equal(failed.events[0]?.kind, "error");
 });
 
-test("导航栏现在是 模型 / 路由 / 供应商 三页循环", () => {
+test("导航栏现在是 模型 / 路由 / 供应商 / 统计 四页循环", () => {
   let state = createTuiState(buildCatalog(config), status, true, providerList);
   state = focusPrev(state); // list → nav（停在模型页）
   assert.equal(state.focus, "nav");
   assert.equal(state.page, "models");
-  state = focusNext(state); // 模型 → 路由
-  assert.equal(state.page, "routing");
-  state = focusNext(state); // 路由 → 供应商
-  assert.equal(state.page, "providers");
-  state = focusNext(state); // 供应商 → 模型（循环）
+  for (const page of TUI_PAGES.slice(1)) {
+    state = focusNext(state);
+    assert.equal(state.page, page);
+  }
+  state = focusNext(state); // 最后一页 → 模型（循环）
   assert.equal(state.page, "models");
-  state = focusPrev(state); // 模型 → 供应商（反向循环）
-  assert.equal(state.page, "providers");
+  state = focusPrev(state); // 模型 → 最后一页（反向循环）
+  assert.equal(state.page, TUI_PAGES.at(-1));
+});
+
+function sampleStatsEvents(): RequestEvent[] {
+  const previousDay = new Date(2026, 8, 26, 10, 0, 0).getTime();
+  const day = new Date(2026, 8, 27, 10, 0, 0).getTime();
+  return [
+    {
+      ts: previousDay,
+      provider: "ark",
+      model: "glm-5.3-flash",
+      endpoint: "/v1/chat/completions",
+      stream: false,
+      status: 200,
+      ok: true,
+      durationMs: 120,
+      ttftMs: null,
+      requestedModel: "warp",
+      routeKind: "warp",
+      routingMode: true,
+      usage: { input: 100, output: 200, total: 300, cached: 50, reasoning: null },
+      finishReason: "stop",
+      rateLimit: null,
+    },
+    {
+      ts: day,
+      provider: "ark",
+      model: "glm-5.3-flash",
+      endpoint: "/v1/chat/completions",
+      stream: true,
+      status: 200,
+      ok: true,
+      durationMs: 1000,
+      ttftMs: 200,
+      requestedModel: "warp",
+      routeKind: "warp",
+      routingMode: true,
+      usage: { input: 10, output: 20, total: 30, cached: null, reasoning: 5 },
+      finishReason: "stop",
+      rateLimit: null,
+    },
+    {
+      ts: day,
+      provider: "ark",
+      model: "glm-5.3-flash",
+      endpoint: "/v1/chat/completions",
+      stream: false,
+      status: 429,
+      ok: false,
+      durationMs: 300,
+      ttftMs: null,
+      requestedModel: "ark/glm-5.3-flash",
+      routeKind: "overridden",
+      routingMode: false,
+      usage: null,
+      finishReason: null,
+      rateLimit: null,
+    },
+    {
+      ts: day,
+      provider: null,
+      model: null,
+      endpoint: "/v1/chat/completions",
+      stream: false,
+      status: 400,
+      ok: false,
+      durationMs: 5,
+      ttftMs: null,
+      requestedModel: "ghost/model",
+      routeKind: "unrouted",
+      routingMode: true,
+      usage: null,
+      finishReason: null,
+      rateLimit: null,
+    },
+  ];
+}
+
+const statsStatus: StatusSnapshot = {
+  ...status,
+  stats: { enabled: true, retentionDays: 30, aggregate: aggregate(sampleStatsEvents()) },
+};
+
+test("统计页渲染按天火花线与 provider 切片，且不泄露密钥", () => {
+  const state = openPage(createTuiState(buildCatalog(config), statsStatus), "stats");
+  const output = renderTui(state, { height: 30, width: 90 });
+
+  assert.match(output, /用量统计/);
+  assert.match(output, /\[ 统计 \]/);
+  assert.match(output, /Token/);
+  assert.match(output, /[\u2581-\u2588]/);
+  assert.match(output, /最近 30 天/);
+  assert.match(output, /汇总\s+请求 4/);
+  assert.match(output, /ark\/glm-5\.3-flash/);
+  assert.match(output, /chat\/completions/);
+  assert.match(output, /全部/);
+  assert.match(output, /被开关覆盖/);
+  assert.match(output, /路由失败/);
+  assert.match(output, /未路由/);
+  assert.doesNotMatch(output, /secret-key/);
+});
+
+test("统计页 ↑↓ 切换 routeKind 过滤且不越界", () => {
+  let state = openPage(createTuiState(buildCatalog(config), statsStatus), "stats");
+  assert.equal(state.statsFilter, 0);
+  assert.equal(selectedStatsFilter(state).id, "all");
+
+  state = moveSelection(state, 1);
+  assert.equal(selectedStatsFilter(state).id, "warp");
+  state = moveSelection(state, 10);
+  assert.equal(state.statsFilter, STATS_FILTERS.length - 1);
+  assert.equal(selectedStatsFilter(state).id, "unrouted");
+  state = moveSelection(state, -10);
+  assert.equal(state.statsFilter, 0);
+});
+
+test("统计页 Enter 在 token / 请求数之间切换", () => {
+  let state = openPage(createTuiState(buildCatalog(config), statsStatus), "stats");
+  assert.equal(state.statsMetric, "tokens");
+  const tokensOutput = renderTui(state, { height: 30, width: 90 });
+  assert.match(tokensOutput, /Token [\u2581-\u2588]/);
+
+  state = toggleStatsMetric(state);
+  assert.equal(state.statsMetric, "requests");
+  const requestsOutput = renderTui(state, { height: 30, width: 90 });
+  assert.match(requestsOutput, /请求 [\u2581-\u2588]/);
+
+  // 其它页面 Enter 不切指标
+  const modelsState = createTuiState(buildCatalog(config), statsStatus);
+  assert.equal(toggleStatsMetric(modelsState), modelsState);
+});
+
+test("统计页在离线 / 未启用 / 无聚合时都不崩溃", () => {
+  const offline = renderTui(
+    openPage(createTuiState(buildCatalog(config), null), "stats"),
+    { height: 24, width: 80 },
+  );
+  assert.match(offline, /统计需要运行中的 daemon/);
+
+  const disabled = renderTui(
+    openPage(
+      createTuiState(buildCatalog(config), {
+        ...status,
+        stats: { enabled: false, retentionDays: 30, aggregate: null },
+      }),
+      "stats",
+    ),
+    { height: 24, width: 80 },
+  );
+  assert.match(disabled, /统计已关闭/);
+  assert.match(disabled, /stats\.enabled=false/);
+
+  const noAggregate = renderTui(
+    openPage(
+      createTuiState(buildCatalog(config), {
+        ...status,
+        stats: { enabled: true, retentionDays: 30, aggregate: null },
+      }),
+      "stats",
+    ),
+    { height: 24, width: 80 },
+  );
+  assert.match(noAggregate, /暂无法读取统计/);
+});
+
+test("统计页渲染不越界且过滤后仍显示命中数", () => {
+  let state = openPage(createTuiState(buildCatalog(config), statsStatus), "stats");
+  state = { ...state, statsFilter: STATS_FILTERS.findIndex((option) => option.id === "overridden") };
+  const output = renderTui(state, { height: 30, width: 90 });
+
+  for (const line of output.split("\n").filter((row) => /^[╭│╰]/.test(row))) {
+    assert.equal(visibleWidth(line), 90);
+  }
+  assert.match(output, /命中 1 请求 · 错误 1/);
+});
+
+test("parseStatusSnapshot 解析 stats 聚合与非法输入", () => {
+  const parsed = parseStatusSnapshot(JSON.parse(JSON.stringify(statsStatus)));
+  assert.ok(parsed);
+  assert.equal(parsed?.stats?.enabled, true);
+  assert.equal(parsed?.stats?.retentionDays, 30);
+  assert.equal(parsed?.stats?.aggregate?.overall.requests, 4);
+  assert.equal(parsed?.stats?.aggregate?.targets.length, 3);
+  assert.equal(
+    parsed?.stats?.aggregate?.targets.some((target) => target.routeKind === "overridden"),
+    true,
+  );
+
+  const invalid = parseStatusSnapshot({
+    port: 8787,
+    configPath: "/tmp/config.jsonc",
+    stats: { enabled: true, retentionDays: 30, aggregate: { overall: {} } },
+  });
+  assert.equal(invalid?.stats?.aggregate, null);
+
+  const missing = parseStatusSnapshot({ port: 8787, configPath: "/tmp/config.jsonc" });
+  assert.equal(missing?.stats, null);
 });

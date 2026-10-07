@@ -10,6 +10,7 @@
 | Active provider/model | `activeProvider`/`activeModel` in config, with safe fallback by `resolveActive()` |
 | Model routing mode | `useClientModel` in config; the TUI writes it with `setUseClientModel()` then calls `POST /_llmwarp/reload` |
 | Daemon process and admin token | `~/.llmwarp/daemon.json` and `src/daemon.ts` |
+| Request statistics (history) | `<CONFIG_DIR>/stats/YYYY-MM-DD.jsonl`, written by the daemon; the TUI only reads the aggregate from `GET /_llmwarp/status` |
 | Prompt/filter/local wizard state | Local variables inside the command flow |
 
 ## Rules
@@ -20,6 +21,7 @@
 - If a daemon is unavailable, degrade gracefully with a warning and preserve the user's local command result where possible.
 - A TUI write is `config.jsonc` first, then the daemon admin call. If the reload fails, keep the config write, surface the error, and re-read the mode from disk instead of trusting the in-memory value.
 - Never display a cached `useClientModel`: the status panel must reflect the value read from `config.jsonc` on the latest refresh.
+- The `统计` page is a pure view of `status.stats.aggregate`. It holds no cache of its own beyond the current render, never writes the stats files, and treats `stats.aggregate === null` (disabled or unreadable) as an empty state rather than an error.
 - A TUI daemon restart is an explicit confirmed action that reuses `stopDaemon()` / `startDaemon()`; the TUI still does not own the lifecycle. It must wait for the old pid to exit before starting, because the port is unchanged and a still-alive old daemon keeps answering the reused keep-alive connection with its old token. After the restart, the new pid and token are re-read from `daemon.json` on the next request, so do not cache them.
 
 ## Future Dashboard

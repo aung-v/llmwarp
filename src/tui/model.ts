@@ -1,4 +1,12 @@
 import { isValidModelName, type Config } from "../config.js";
+import type {
+  Aggregate,
+  AggregateMetrics,
+  DayAggregate,
+  HourAggregate,
+  TargetAggregate,
+} from "../stats/aggregate.js";
+import type { RouteKind } from "../stats/event.js";
 
 export interface StatusSnapshot {
   active: { provider: string; model: string | null } | null;
@@ -7,6 +15,14 @@ export interface StatusSnapshot {
   startedAt: string;
   version: string;
   metrics: RequestMetricsSnapshot | null;
+  stats: StatsSnapshot | null;
+}
+
+/** 管理端 status 的历史聚合摘要；统计关闭时 aggregate 为 null。 */
+export interface StatsSnapshot {
+  enabled: boolean;
+  retentionDays: number;
+  aggregate: Aggregate | null;
 }
 
 export interface RequestActivity {
@@ -41,11 +57,32 @@ export interface CatalogItem {
 /** 确认态意图：切换模型 / 切换模型路由 / 重启守护进程 / 删除供应商。 */
 export type ConfirmIntent = "switch" | "routing" | "restart" | "remove-provider";
 
-/** 顶部导航页：模型列表 / 模型路由模式 / 供应商管理。 */
-export type TuiPage = "models" | "routing" | "providers";
+/** 顶部导航页：模型列表 / 模型路由模式 / 供应商管理 / 用量统计。 */
+export type TuiPage = "models" | "routing" | "providers" | "stats";
 
 /** 顶部导航顺序，也决定 ←→ 换页循环顺序。 */
-export const TUI_PAGES: TuiPage[] = ["models", "routing", "providers"];
+export const TUI_PAGES: TuiPage[] = ["models", "routing", "providers", "stats"];
+
+/** 统计页的 routeKind 过滤器；`all` 表示不过滤。 */
+export type StatsFilter = "all" | RouteKind;
+
+export interface StatsFilterOption {
+  id: StatsFilter;
+  label: string;
+}
+
+/** 统计页过滤器顺序，也决定 ↑↓ 循环顺序。 */
+export const STATS_FILTERS: StatsFilterOption[] = [
+  { id: "all", label: "全部" },
+  { id: "warp", label: "warp 别名" },
+  { id: "explicit", label: "按客户端" },
+  { id: "fallback", label: "未指定模型" },
+  { id: "overridden", label: "被开关覆盖" },
+  { id: "unrouted", label: "路由失败" },
+];
+
+/** 火花线指标：token 总量 / 请求数。 */
+export type StatsMetric = "tokens" | "requests";
 
 /** 键盘焦点区域：导航栏 / 当前页列表 / 守护进程信息栏（含重启按钮）。 */
 export type TuiFocus = "nav" | "list" | "daemon";
@@ -92,6 +129,8 @@ export interface TuiState {
   message: string | null;
   switching: boolean;
   useClientModel: boolean;
+  statsFilter: number;
+  statsMetric: StatsMetric;
 }
 
 export function buildCatalog(config: Config, status?: StatusSnapshot | null): CatalogItem[] {
@@ -166,6 +205,8 @@ export function createTuiState(
     message: null,
     switching: false,
     useClientModel,
+    statsFilter: 0,
+    statsMetric: "tokens",
   };
 }
 
@@ -219,12 +260,27 @@ export function moveSelection(state: TuiState, delta: number): TuiState {
     return { ...state, providerCursor: next, providerSelected };
   }
 
+  if (state.page === "stats") {
+    const next = Math.min(Math.max(state.statsFilter + delta, 0), STATS_FILTERS.length - 1);
+    return { ...state, statsFilter: next };
+  }
+
   const next = Math.min(Math.max(state.selected + delta, 0), Math.max(state.entries.length - 1, 0));
   return { ...state, selected: next };
 }
 
 export function selectedRouting(state: TuiState): RoutingOption {
   return ROUTING_OPTIONS[state.routingSelected] ?? ROUTING_OPTIONS[0];
+}
+
+export function selectedStatsFilter(state: TuiState): StatsFilterOption {
+  return STATS_FILTERS[state.statsFilter] ?? STATS_FILTERS[0];
+}
+
+/** 统计页 Enter：在 token / 请求数两种火花线指标间切换。 */
+export function toggleStatsMetric(state: TuiState): TuiState {
+  if (navigationLocked(state) || state.page !== "stats") return state;
+  return { ...state, statsMetric: state.statsMetric === "tokens" ? "requests" : "tokens" };
 }
 
 export function selectedEntry(state: TuiState): CatalogItem | null {
@@ -340,7 +396,114 @@ export function parseStatusSnapshot(payload: unknown): StatusSnapshot | null {
     startedAt: typeof value.startedAt === "string" ? value.startedAt : "",
     version: typeof value.version === "string" ? value.version : "unknown",
     metrics: parseMetricsSnapshot(value.metrics),
+    stats: parseStatsSnapshot(value.stats),
   };
+}
+
+const METRIC_KEYS = [
+  "requests",
+  "errors",
+  "errorRate",
+  "avgDurationMs",
+  "p50DurationMs",
+  "p95DurationMs",
+  "avgTtftMs",
+  "p95TtftMs",
+  "ttftSamples",
+  "inputTokens",
+  "outputTokens",
+  "totalTokens",
+  "cachedTokens",
+  "reasoningTokens",
+  "truncations",
+  "contentFiltered",
+  "streamRequests",
+  "nonStreamRequests",
+] as const;
+
+const ROUTE_KINDS: RouteKind[] = ["warp", "explicit", "fallback", "overridden", "unrouted"];
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+/** 严格校验聚合指标；任一必需数值缺失即视为不可用（返回 null）。 */
+function parseMetrics(payload: unknown): AggregateMetrics | null {
+  if (!payload || typeof payload !== "object") return null;
+  const value = payload as Record<string, unknown>;
+  if (!METRIC_KEYS.every((key) => isFiniteNumber(value[key]))) return null;
+  const metrics = {} as AggregateMetrics;
+  for (const key of METRIC_KEYS) {
+    (metrics as unknown as Record<string, unknown>)[key] = value[key];
+  }
+  metrics.outputTokensPerSecond = isFiniteNumber(value.outputTokensPerSecond)
+    ? value.outputTokensPerSecond
+    : null;
+  return metrics;
+}
+
+function parseStatsSnapshot(payload: unknown): StatsSnapshot | null {
+  if (!payload || typeof payload !== "object") return null;
+  const value = payload as Record<string, unknown>;
+  if (typeof value.enabled !== "boolean") return null;
+  const retentionDays = isFiniteNumber(value.retentionDays) ? value.retentionDays : 30;
+  if (value.aggregate === null || value.aggregate === undefined) {
+    return { enabled: value.enabled, retentionDays, aggregate: null };
+  }
+  const aggregate = parseAggregate(value.aggregate);
+  if (!aggregate) return { enabled: value.enabled, retentionDays, aggregate: null };
+  return { enabled: value.enabled, retentionDays, aggregate };
+}
+
+function parseAggregate(payload: unknown): Aggregate | null {
+  if (!payload || typeof payload !== "object") return null;
+  const value = payload as Record<string, unknown>;
+  const overall = parseMetrics(value.overall);
+  const unrouted = parseMetrics(value.unrouted);
+  if (!overall || !unrouted) return null;
+
+  const days: DayAggregate[] = [];
+  if (Array.isArray(value.days)) {
+    for (const item of value.days) {
+      if (!item || typeof item !== "object") return null;
+      const day = (item as Record<string, unknown>).day;
+      const metrics = parseMetrics(item);
+      if (typeof day !== "string" || !metrics) return null;
+      days.push({ ...metrics, day });
+    }
+  }
+
+  const hours: HourAggregate[] = [];
+  if (Array.isArray(value.hours)) {
+    for (const item of value.hours) {
+      if (!item || typeof item !== "object") return null;
+      const hour = (item as Record<string, unknown>).hour;
+      const metrics = parseMetrics(item);
+      if (typeof hour !== "string" || !metrics) return null;
+      hours.push({ ...metrics, hour });
+    }
+  }
+
+  const targets: TargetAggregate[] = [];
+  if (Array.isArray(value.targets)) {
+    for (const item of value.targets) {
+      if (!item || typeof item !== "object") return null;
+      const record = item as Record<string, unknown>;
+      const metrics = parseMetrics(item);
+      if (!metrics) return null;
+      if (typeof record.endpoint !== "string") return null;
+      if (!ROUTE_KINDS.includes(record.routeKind as RouteKind)) return null;
+      targets.push({
+        ...metrics,
+        provider: typeof record.provider === "string" ? record.provider : null,
+        model: typeof record.model === "string" ? record.model : null,
+        endpoint: record.endpoint,
+        routeKind: record.routeKind as RouteKind,
+      });
+    }
+  }
+
+  return { overall, days, hours, targets, unrouted };
 }
 
 function parseMetricsSnapshot(payload: unknown): RequestMetricsSnapshot | null {

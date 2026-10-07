@@ -12,19 +12,25 @@ src/
 ├── daemon.ts       # Background process lifecycle and admin HTTP client
 ├── endpoint.ts     # Local OpenAI-compatible endpoint text
 ├── health.ts       # Provider reachability/auth checks
+├── metrics.ts      # In-memory real-time request metrics (TUI activity panel)
 ├── net.ts          # Port ownership and address helpers
 ├── proxy.ts        # Request forwarding, header/model rewriting, SSE streaming
 ├── routing.ts      # Local model catalog (GET /v1/models) and model-name -> route resolution
 ├── searchCheckbox.ts
 ├── server.ts       # HTTP server and admin/proxy route dispatch
+├── stats/          # Usage statistics: event parsing, JSONL store, aggregation, collector
 └── ui.ts           # Terminal output and prompt helpers
 test/
 ├── commands.test.ts
 ├── config.test.ts
 ├── proxy.test.ts
 ├── routing.test.ts
+├── routing-stats.test.ts
 ├── server-routing.test.ts
-└── server.test.ts
+├── server.test.ts
+├── stats-aggregate.test.ts
+├── stats-event.test.ts
+└── stats-store.test.ts
 ```
 
 ## Module Boundaries
@@ -34,6 +40,7 @@ test/
 - HTTP route dispatch lives in `src/server.ts`; request reading, URL construction, and upstream streaming belong in `src/proxy.ts`.
 - Process lifecycle belongs in `src/daemon.ts`; daemon metadata is read/written through `src/config.ts`.
 - Provider checks belong in `src/health.ts`; do not duplicate reachability or key-resolution logic in commands.
+- Request statistics belong in `src/stats/`: `event.ts` owns the schema and fail-soft parsers, `store.ts` owns JSONL persistence, `aggregate.ts` owns read-time grouping, and `collect.ts` owns gating + pruning. `src/metrics.ts` stays the in-memory real-time window; do not make the proxy or TUI read the disk directly.
 
 ## Naming and Imports
 

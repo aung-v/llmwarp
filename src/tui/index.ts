@@ -40,6 +40,7 @@ import {
   selectedEntry,
   selectedProvider,
   selectedRouting,
+  toggleStatsMetric,
   type CatalogItem,
   type ProviderSummary,
   type StatusSnapshot,
@@ -209,6 +210,8 @@ export async function startTui(): Promise<void> {
       const previousRoutingSelected = state.routingSelected;
       const previousProviderCursor = state.providerCursor;
       const previousProviderSelected = state.providerSelected;
+      const previousStatsFilter = state.statsFilter;
+      const previousStatsMetric = state.statsMetric;
       const previousConfirming = state.confirming;
       const previousEvents = state.events;
       state = createTuiState(entries, status, useClientModel, providers);
@@ -222,6 +225,9 @@ export async function startTui(): Promise<void> {
       // 供应商页同理：光标和删除目标要保住，且供应商减少后要收敛到有效范围。
       state.providerCursor = Math.min(previousProviderCursor, Math.max(providers.length + 1, 0));
       state.providerSelected = Math.min(previousProviderSelected, Math.max(providers.length - 1, 0));
+      // 统计页的过滤与指标选择是纯视图状态，自动刷新不能重置。
+      state.statsFilter = previousStatsFilter;
+      state.statsMetric = previousStatsMetric;
       if (previousConfirming === "switch") {
         state.confirming = state.entries[state.selected]?.selectable ? "switch" : null;
       } else if (previousConfirming === "routing" && previousPage === "routing") {
@@ -360,6 +366,12 @@ export async function startTui(): Promise<void> {
         state = beginRemoveProviderConfirm(state);
         draw();
       }
+      return;
+    }
+    if (state.page === "stats") {
+      // 统计页 Enter 只在 token / 请求数两种视图间切换，不涉及写操作。
+      state = toggleStatsMetric(state);
+      draw();
       return;
     }
     if (state.page === "routing") {

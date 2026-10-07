@@ -1,0 +1,11 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "backend 规范索引与语言/依赖约束"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "新增 src/stats/* 模块应放哪里、边界如何划分"}
+{"file": ".trellis/spec/backend/model-routing.md", "reason": "warp 别名、{provider}/{model}、useClientModel 与 /v1/models 的既有语义，本次统计归属必须遵守"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "上游失败、路由错误、配置错误的处理与记录方式"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "采集与落盘日志的脱敏与输出约定"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试、类型检查与受限环境（socket）约定"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "frontend 规范索引"}
+{"file": ".trellis/spec/frontend/architecture.md", "reason": "TUI「统计」页应遵循的代码分层"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "新增页面/焦点/确认态的状态归属"}
+{"file": ".trellis/spec/frontend/interaction-guidelines.md", "reason": "按键、导航与确认交互约定"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层数据流（proxy → stats → status → TUI）检查"}

@@ -37,14 +37,15 @@ Current persistent-TUI key map, kept in `src/tui/index.ts` and surfaced in the f
 
 | Key | Action |
 |---|---|
-| `←` / `→` | Move focus between the left list and the daemon panel; while focus is on the top nav bar, cycle between the `模型` / `路由` / `供应商` pages |
+| `←` / `→` | Move focus between the left list and the daemon panel; while focus is on the top nav bar, cycle between the `模型` / `路由` / `供应商` / `统计` pages |
 | `↑` / `↓` | Move the selection within the current page's list (from the nav bar, descend into the list) |
-| `Enter` | Trigger the focused item: confirm a model/routing change, open the restart confirmation while focused on the daemon panel, or start the provider add/edit/remove flow on the `供应商` page |
+| `Enter` | Trigger the focused item: confirm a model/routing change, open the restart confirmation while focused on the daemon panel, start the provider add/edit/remove flow on the `供应商` page, or toggle token/request units on the `统计` page |
 | `Esc` | Cancel a pending confirmation; outside a confirmation, move focus back one level (daemon → list, list → nav) |
 | `r` | Refresh state and catalog |
 | `q`, `Ctrl-C` | Quit the TUI (the daemon keeps running) |
 
-- Navigation is a two-level structure: a top nav bar (`模型` / `路由` / `供应商`), the current page's list, and the right-hand daemon panel. The selected item and the focused region must both be visibly distinguishable.
+- Navigation is a two-level structure: a top nav bar (`模型` / `路由` / `供应商` / `统计`), the current page's list, and the right-hand daemon panel. The selected item and the focused region must both be visibly distinguishable.
+- The `统计` page is read-only: `↑`/`↓` cycles the `routeKind` filter (including `被开关覆盖` / `路由失败`); it has no confirmation and no write action.
 - The `供应商` page is the provider-management entry: the list rows open the existing `edit` flow, and the `[ + 添加供应商 ]` / `[ - 删除 … ]` rows trigger `add` / `remove`. There is no provider business logic in the TUI. Triggering one suspends the TUI (leave the alternate screen, disable raw mode), runs the existing CLI flow unchanged (`inquirer` / `$EDITOR` work as usual), waits for a key, then re-enters the alternate screen and refreshes. Failures/aborts restore the TUI and land in the bottom-right feedback area.
 - Action results live in the bottom-right `反馈 / 请求活动` panel, together with request metrics. Every action (switch model/routing, start/restart daemon) must append a `✓`/`✗` event with the full reason on failure; the event survives auto-refresh instead of being written to a footer line that the next refresh erases.
 - Confirmations are two-step and intent-scoped: the prompt must restate the consequence (`切换为「统一用当前模型」？客户端请求的模型将被忽略。`), not just the action. The restart confirmation must state that in-flight `/v1` requests are interrupted.

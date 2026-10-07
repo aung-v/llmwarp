@@ -15,12 +15,28 @@ export interface Provider {
   models?: string[];
 }
 
+export interface StatsConfig {
+  enabled: boolean;
+  retentionDays: number;
+}
+
 export interface Config {
   port?: number;
   activeProvider?: string;
   activeModel?: string;
   useClientModel?: boolean;
+  stats?: StatsConfig;
   providers: Record<string, Provider>;
+}
+
+export const DEFAULT_STATS_CONFIG: StatsConfig = { enabled: true, retentionDays: 30 };
+
+/** 归一化后的统计配置；`stats` 缺省或部分缺失时补齐默认值。 */
+export function getStatsConfig(config: Config): StatsConfig {
+  return {
+    enabled: config.stats?.enabled ?? DEFAULT_STATS_CONFIG.enabled,
+    retentionDays: config.stats?.retentionDays ?? DEFAULT_STATS_CONFIG.retentionDays,
+  };
 }
 
 const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
@@ -68,6 +84,14 @@ export const CONFIG_TEMPLATE = `{
   // 当前激活的供应商与模型（由 llmwarp use 自动维护，也可手改后 llmwarp reload）
   "activeProvider": "",
   "activeModel": "",
+
+  // 用量统计（落盘到 <配置目录>/stats/YYYY-MM-DD.jsonl）
+  "stats": {
+    // 关闭后完全不采集、不落盘，也不向上游注入 stream_options
+    "enabled": true,
+    // 历史数据保留天数，超期文件在启动与写入时清理
+    "retentionDays": 30
+  },
 
   // 供应商列表，键名即供应商名
   "providers": {
@@ -150,7 +174,23 @@ function normalizeConfig(raw: unknown): Config {
     activeProvider: typeof obj.activeProvider === "string" && obj.activeProvider ? obj.activeProvider : undefined,
     activeModel: typeof obj.activeModel === "string" && obj.activeModel ? obj.activeModel : undefined,
     useClientModel: typeof obj.useClientModel === "boolean" ? obj.useClientModel : true,
+    stats: normalizeStatsConfig(obj.stats),
     providers,
+  };
+}
+
+/** 统计配置：enabled 非布尔回退 true；retentionDays 必须是 >=1 的有限数，否则回退 30。 */
+export function normalizeStatsConfig(raw: unknown): StatsConfig {
+  const obj = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const retention =
+    typeof obj.retentionDays === "number" &&
+    Number.isFinite(obj.retentionDays) &&
+    obj.retentionDays >= 1
+      ? Math.floor(obj.retentionDays)
+      : DEFAULT_STATS_CONFIG.retentionDays;
+  return {
+    enabled: typeof obj.enabled === "boolean" ? obj.enabled : DEFAULT_STATS_CONFIG.enabled,
+    retentionDays: retention,
   };
 }
 

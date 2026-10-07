@@ -1,6 +1,6 @@
 {
   "name": "llmwarp",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Local OpenAI-protocol router CLI for switching LLM API providers",
   "type": "module",
   "bin": {

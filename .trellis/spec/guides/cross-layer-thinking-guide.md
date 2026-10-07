@@ -325,3 +325,32 @@ state correctly, but several commands still re-parsed event payload fields with
 local casts. The fix was to make the core event layer own `ThreadChannelEvent`
 and `isThreadEvent`, make `reduceChannelMetadata` the only channel metadata
 projection, and make `reduceThreads` the only thread replay reducer.
+
+---
+
+## Observability on a Proxy Boundary
+
+When you attach statistics to a proxy, the observation path and the forwarding
+path share one response body. Two failure modes account for most bugs:
+
+1. **The observer changes the traffic.** Buffering an SSE stream to parse it,
+   or injecting a request field the upstream rejects, silently breaks the
+   product to serve the metrics.
+2. **The metric is attributed to the wrong thing.** Recording the client-side
+   request string instead of the resolved target mixes distinct upstreams into
+   one bucket once aliases (like `warp`) or overrides (like `useClientModel`)
+   are in play.
+
+### Checklist: Adding Observability To A Proxy
+
+- [ ] The forwarded response is byte-identical and preserves chunk order; assert
+      streaming with a reader, not `await res.text()`
+- [ ] Observation failures degrade to "not collected" and never affect the
+      response status or body
+- [ ] Anything the observer injects into the request is opt-in, path-scoped, and
+      reversible via config
+- [ ] Metrics are keyed on the **resolved** upstream target, with the original
+      request and the reason for any override stored separately
+- [ ] Requests that never reached an upstream are counted separately and excluded
+      from per-upstream denominators
+- [ ] Disk writes on the request path are non-throwing and bounded
