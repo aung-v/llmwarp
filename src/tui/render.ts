@@ -569,11 +569,30 @@ function wrapSanitized(text: string, width: number): string[] {
   return rows;
 }
 
+/**
+ * 把整帧转成终端指令：每行用 CSI 绝对定位写在第 N 行第 1 列，行尾用 EL 擦掉该行
+ * 剩余列，帧尾再用 ED 擦掉屏幕剩余部分。
+ *
+ * 不直接 `ESC[H + frame + ESC[J` 的原因：帧内靠 `\n` 换行，而 `\n` 会不会回到第 1 列
+ * 取决于终端的 OPOST/ONLCR（Node 的 raw 模式在 Unix 上正好会把它关掉）。一旦关掉，
+ * `\n` 只下移不回列，补满 width 的行就从上一行结尾那一列继续写，屏幕上看就是「同一
+ * 行里又叠了一层导航栏」。绝对定位不依赖任何换行语义，每帧整行覆盖，上一帧的尾巴由
+ * EL/ED 清掉。
+ */
+export function frameToAnsi(frame: string): string {
+  const lines = frame.split("\n");
+  let output = "";
+  for (let index = 0; index < lines.length; index += 1) {
+    output += `\u001B[${index + 1};1H${lines[index]}\u001B[K`;
+  }
+  return `${output}\u001B[J`;
+}
+
 export function renderTui(
   state: TuiState,
   options: { height?: number; width?: number } = {},
 ): string {
-  const height = Math.max(options.height ?? 24, 22);
+  const height = Math.max(options.height ?? 24, 12);
   const width = Math.max(options.width ?? 80, 72);
   const running = Boolean(state.status);
 
@@ -660,7 +679,9 @@ export function renderTui(
   // 滚动、整屏错位。把每行补齐/截断到 width，并在超高的极端情况下从 body 截掉多余
   // 行（页脚与确认框永远保留），下一帧就会逐格覆盖上一帧。
   const maxBody = Math.max(height - header.length - noticeRows.length - footer.length, 0);
-  const lines = [...header, ...body.slice(0, maxBody), ...noticeRows, ...footer];
+  // 兜底：极端矮的终端 + 好几行确认框时，仍要保证不超过 height——多出来的行宁可裁掉，
+  // 也不能让终端滚动（一滚动整屏就错位，就是「显示了两层」的来源）。
+  const lines = [...header, ...body.slice(0, maxBody), ...noticeRows, ...footer].slice(0, height);
   // 最后一行少写一格：终端在右下角那一格会立刻回绕并滚屏（conhost 等），一滚屏上一帧
   // 就露出来，看起来像「显示了两层」。右下角空一格肉眼看不出来，但滚动没有了。
   const lastIndex = lines.length - 1;

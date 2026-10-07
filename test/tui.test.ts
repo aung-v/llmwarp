@@ -32,7 +32,7 @@ import {
   type TuiPage,
   type TuiState,
 } from "../src/tui/model.js";
-import { formatCount, renderTui, visibleWidth } from "../src/tui/render.js";
+import { formatCount, frameToAnsi, renderTui, visibleWidth } from "../src/tui/render.js";
 import type { Config } from "../src/config.js";
 import { AggregateAccumulator } from "../src/stats/aggregate.js";
 import type { RequestEvent } from "../src/stats/event.js";
@@ -375,6 +375,24 @@ test("整帧重绘要求矩形：每行等宽且不超 height，导航提示 / �
       }
     }
   }
+});
+
+// 回归：draw() 以前是 ESC[H + 帧 + ESC[J，帧内靠 "\n" 换行。`\n` 是否回列取决于终端
+// 的 OPOST/ONLCR（raw 模式下可能被关掉），不回列时补满 width 的行会从上一行结尾的列
+// 继续写，屏幕上就叠出第二层导航栏。改成绝对定位后，输出里不能再出现裸换行。
+test("整帧输出用绝对定位逐行覆盖，不含裸换行", () => {
+  const state = createTuiState(buildCatalog(config), status);
+  const frame = renderTui(state, { height: 24, width: 80 });
+  const ansi = frameToAnsi(frame);
+
+  assert.ok(!ansi.includes("\n"), "帧输出里不能有裸换行（依赖终端回列会错位）");
+  // 精确锁定输出：顺序、绝对定位行号、每行 EL 擦尾、帧尾 ED 清屏都必须是这份契约的一部分，
+  // 只做 includes 会漏掉「行写反了 / 少写一行」这类回归。
+  const expected = `${frame
+    .split("\n")
+    .map((line, index) => `\u001B[${index + 1};1H${line}\u001B[K`)
+    .join("")}\u001B[J`;
+  assert.equal(ansi, expected, "整帧必须逐行绝对定位 + EL 擦尾，最后 ED 清屏");
 });
 
 test("处理中… 只出现在 switching 状态，动作结束后不再残留", () => {

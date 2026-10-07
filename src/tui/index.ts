@@ -48,7 +48,7 @@ import {
   type StatusSnapshot,
   type TuiState,
 } from "./model.js";
-import { renderTui } from "./render.js";
+import { frameToAnsi, renderTui } from "./render.js";
 
 const REFRESH_MS = 3000;
 const HIDE_CURSOR = "\u001B[?25l";
@@ -183,10 +183,14 @@ export async function startTui(): Promise<void> {
   const draw = (): void => {
     if (stopped) return;
     process.stdout.write(
-      `\u001B[H${renderTui(state, {
-        height: process.stdout.rows ?? 24,
-        width: process.stdout.columns ?? 80,
-      })}\u001B[J`,
+      frameToAnsi(
+        renderTui(state, {
+          // 少用最后一行：只要不落在终端最后一行，任何回绕都不会触发滚屏；一滚屏上一帧
+          // 就整体错位，看起来就是「叠了两层导航栏」。最底下一行留白肉眼几乎看不出来。
+          height: Math.max((process.stdout.rows ?? 24) - 1, 12),
+          width: process.stdout.columns ?? 80,
+        }),
+      ),
     );
   };
 
