@@ -336,6 +336,58 @@ test("面板补空格时保留行内颜色", () => {
   }
 });
 
+// 回归：draw() 用 ESC[H + 帧 + ESC[J 重绘。ED 0 只从光标擦到屏幕末尾，擦不掉同一行
+// 光标之前的旧字符；帧比终端高还会让屏幕滚动错位。所以帧必须是「每行等宽、行数不超
+// height」的矩形：这样下一帧会逐格覆盖上一帧，导航栏提示 → 处理中… → 结束 之间的短行
+// 残留（假「处理中」）和确认框弹出时的整屏错位才不会出现。
+test("整帧重绘要求矩形：每行等宽且不超 height，导航提示 / 处理中 / 结束后都不留尾巴", () => {
+  const base = createTuiState(buildCatalog(config), status);
+  const navFocus = focusPrev(base); // 焦点到导航栏，表头出现「←→ 换页  ↑↓ 进入列表」
+  const switching = beginSwitch(beginSwitchConfirm(navFocus));
+  assert.ok(switching, "确认态下应能进入切换在途状态");
+  const daemonFocus = focusNext(base); // 焦点落到守护进程栏，无导航栏提示
+  const confirm = beginSwitchConfirm(openPage(base, "models")); // 确认框多占 7 行，最容易顶破高度
+
+  const states: Array<[string, TuiState]> = [
+    ["导航栏提示", navFocus],
+    ["处理中", switching],
+    ["动作结束", daemonFocus],
+    ["切换确认框", confirm],
+  ];
+
+  for (const height of [30, 24, 22]) {
+    for (const width of [100, 72]) {
+      for (const [label, state] of states) {
+        const lines = renderTui(state, { height, width }).split("\n");
+        assert.ok(
+          lines.length <= height,
+          `${label} 在 ${height}x${width} 下渲染 ${lines.length} 行，写下去会让终端滚动`,
+        );
+        for (const line of lines) {
+          assert.equal(
+            visibleWidth(line),
+            width,
+            `${label} 在 width=${width} 下存在非等宽行，ESC[J 会留下上一帧的尾巴`,
+          );
+        }
+      }
+    }
+  }
+});
+
+test("处理中… 只出现在 switching 状态，动作结束后不再残留", () => {
+  const base = createTuiState(buildCatalog(config), status);
+  const navFocus = focusPrev(base);
+  const switching = beginSwitch(beginSwitchConfirm(navFocus));
+  assert.ok(switching, "确认态下应能进入切换在途状态");
+
+  assert.doesNotMatch(renderTui(navFocus, { height: 24, width: 80 }), /处理中…/);
+  assert.match(renderTui(switching, { height: 24, width: 80 }), /处理中…/);
+
+  const finished = renderTui(finishSwitch(switching, null), { height: 24, width: 80 });
+  assert.doesNotMatch(finished, /处理中…/);
+});
+
 test("状态区展示模型路由模式，且与 useClientModel 一致", () => {
   const entries = buildCatalog(config);
   const clientMode = renderTui(createTuiState(entries, status, true), { height: 24, width: 80 });
