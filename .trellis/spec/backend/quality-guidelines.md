@@ -17,7 +17,9 @@ npm test
 - Put pure logic tests in focused files matching the module: `test/config.test.ts` and `test/proxy.test.ts` are the pattern.
 - Test configuration normalization and validation, URL rewriting, model routing/catalog behavior, and HTTP behavior.
 - For HTTP integration tests, bind ephemeral upstream and router ports, write configuration into a temporary `HOME`, and clean up with `t.after`.
+- Environments without socket permission (restricted sandboxes reject `bind` with `EPERM`) cannot run those tests: gate them with `skipWithoutSockets()` from `test/support/sockets.ts` as the `node:test` `skip` option so they skip with a reason instead of failing. Do **not** rewrite integration tests into fake-socket unit tests just to make a restricted environment green.
 - Keep tests deterministic; do not depend on real provider APIs or network access.
+- Statistics changes follow `.trellis/spec/backend/usage-stats.md`: cover fail-soft parsing (missing/illegal fields -> `null`), JSONL per-day round-trip and retention, aggregation percentiles / error rate / `unrouted` separation, and `warp` + `useClientModel` attribution. `/v1` response bytes, status codes, and SSE chunk order must be unchanged, so streaming assertions read `res.body.getReader()` rather than `await res.text()`.
 
 Example coverage to preserve:
 

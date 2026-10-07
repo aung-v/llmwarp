@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import http from "node:http";
+import { skipWithoutSockets } from "./support/sockets.js";
 
 const home = mkdtempSync(join(tmpdir(), "llmwarp-routing-"));
 process.env.HOME = home;
@@ -13,6 +14,8 @@ process.env.BETA_UPSTREAM_KEY = "beta-secret";
 
 const { CONFIG_DIR, CONFIG_PATH } = await import("../src/config.js");
 const { startServer } = await import("../src/server.js");
+
+const socketSkip = await skipWithoutSockets();
 
 interface SeenRequest {
   url?: string;
@@ -108,7 +111,7 @@ function errorType(res: ProxyResponse): string {
   return (res.json as { error: { type: string } }).error.type;
 }
 
-test("集成：本地 /v1/models 目录与供应商前缀路由", async () => {
+test("集成：本地 /v1/models 目录与供应商前缀路由", { skip: socketSkip }, async () => {
   const alpha = await startUpstream();
   const beta = await startUpstream();
   writeConfig(alpha.port, beta.port);

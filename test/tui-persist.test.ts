@@ -6,6 +6,7 @@ import { join } from "node:path";
 import http from "node:http";
 import { spawn } from "node:child_process";
 import type { Config } from "../src/config.js";
+import { skipWithoutSockets } from "./support/sockets.js";
 
 const home = mkdtempSync(join(tmpdir(), "llmwarp-tui-persist-"));
 process.env.HOME = home;
@@ -26,6 +27,8 @@ const { startServer } = await import("../src/server.js");
 const { applyActiveSelection, applyRoutingMode, restartDaemon } = await import("../src/tui/index.js");
 const { beginRoutingConfirm, cancelConfirm, createTuiState, focusNext, focusPrev, moveSelection } =
   await import("../src/tui/model.js");
+
+const socketSkip = await skipWithoutSockets();
 
 /** 走真实键位路径切到路由页：← 到导航栏 → → 换页 → ↓ 把焦点落回列表。 */
 function openRoutingPage(state: ReturnType<typeof createTuiState>): ReturnType<typeof createTuiState> {
@@ -139,7 +142,7 @@ test("applyActiveSelection 非法模型名：抛错且配置文件字节不变�
   }
 });
 
-test("切换后配置文件与 daemon 状态一致", async () => {
+test("切换后配置文件与 daemon 状态一致", { skip: socketSkip }, async () => {
   const port = await freePort();
   writeConfig(port, "ark", "glm");
 
@@ -194,7 +197,7 @@ test("daemon 未运行时切换路由仍落盘且保留注释", async () => {
   assert.equal(existsSync(DAEMON_PATH), false);
 });
 
-test("reload 失败：错误可见、配置写入保留、只尝试一次", async () => {
+test("reload 失败：错误可见、配置写入保留、只尝试一次", { skip: socketSkip }, async () => {
   clearDaemonInfo();
   mkdirSync(CONFIG_DIR, { recursive: true });
   writeFileSync(CONFIG_PATH, COMMENTED_CONFIG);
@@ -226,7 +229,7 @@ test("reload 失败：错误可见、配置写入保留、只尝试一次", asyn
   }
 });
 
-test("applyRoutingMode 后 daemon 立刻按新模式路由", async () => {
+test("applyRoutingMode 后 daemon 立刻按新模式路由", { skip: socketSkip }, async () => {
   const alpha = await startUpstream();
   const beta = await startUpstream();
   const port = await freePort();
@@ -329,7 +332,7 @@ test("restartDaemon 启动失败向上抛且保留停止结果", async () => {
   assert.deepEqual(calls, ["stop", "wait:4242", "start"]);
 });
 
-test("同端口重启：旧 daemon 关闭后新 token 立即生效（keep-alive 不复用旧连接）", async () => {
+test("同端口重启：旧 daemon 关闭后新 token 立即生效（keep-alive 不复用旧连接）", { skip: socketSkip }, async () => {
   const port = await freePort();
   writeConfig(port, "ark", "glm");
 
@@ -356,7 +359,7 @@ test("同端口重启：旧 daemon 关闭后新 token 立即生效（keep-alive 
   }
 });
 
-test("adminRequest 对不响应的 daemon 会超时报错，不会让界面永久卡在“处理中”", async () => {
+test("adminRequest 对不响应的 daemon 会超时报错，不会让界面永久卡在“处理中”", { skip: socketSkip }, async () => {
   clearDaemonInfo();
   // 只接受连接、永不响应，模拟旧 daemon 半开/卡死的 keep-alive 连接。
   const stuck = http.createServer(() => {
