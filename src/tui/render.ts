@@ -404,7 +404,7 @@ function statsRows(state: TuiState, height: number, width: number): string[] {
   );
   rows.push(
     pc.dim(
-      `       ↑↓ 切换过滤  Enter 切换指标   命中 ${filteredRequests} 请求 · 错误 ${filteredErrors} · 未路由 ${aggregate.unrouted.requests}`,
+      `       ↑↓ 切换过滤  Enter 切换指标   命中 ${filteredRequests} 请求 · 错误 ${filteredErrors} · 未发出 ${aggregate.unrouted.requests}`,
     ),
   );
   rows.push("");
@@ -424,7 +424,8 @@ function statsRows(state: TuiState, height: number, width: number): string[] {
     rows.push(pc.dim("该过滤条件下暂无请求"));
   } else {
     for (const target of filtered.slice(0, Math.max(available, 0))) {
-      const label = `${sanitize(target.provider ?? "未路由")}/${sanitize(target.model ?? "—")}`;
+      // 旧载荷可能仍带 provider 为空的目标（新代码不再产生）；标签与过滤行统一用「未发出」。
+      const label = `${sanitize(target.provider ?? "未发出")}/${sanitize(target.model ?? "—")}`;
       const ttft = target.ttftSamples > 0 ? `${target.avgTtftMs}ms` : "—";
       rows.push(
         `${pad(label, labelWidth)} ${pad(shortEndpoint(sanitize(target.endpoint)), endpointWidth)} ${rightAlign(String(target.requests), 5)} ${rightAlign(percent(target.errorRate), 7)} ${rightAlign(`${target.avgDurationMs}ms`, 6)} ${rightAlign(ttft, 6)} ${rightAlign(`${target.p95DurationMs}ms`, 7)}`,

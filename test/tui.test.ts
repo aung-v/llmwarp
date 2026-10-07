@@ -731,7 +731,7 @@ test("统计页渲染按天火花线与 provider 切片，且不泄露密钥", (
   assert.match(output, /Token/);
   assert.match(output, /[\u2581-\u2588]/);
   assert.match(output, /最近 30 天/);
-  assert.match(output, /汇总\s+请求 4/);
+  assert.match(output, /汇总\s+请求 3/);
   assert.match(output, /中断 0/);
   assert.match(output, /TTFT/);
   assert.match(output, /TTFT 平均 200ms/);
@@ -739,8 +739,9 @@ test("统计页渲染按天火花线与 provider 切片，且不泄露密钥", (
   assert.match(output, /chat\/completions/);
   assert.match(output, /全部/);
   assert.match(output, /被开关覆盖/);
-  assert.match(output, /路由失败/);
-  assert.match(output, /未路由/);
+  // 路由失败已不再作为过滤项；未发出的计数仍显示在过滤行。
+  assert.doesNotMatch(output, /路由失败/);
+  assert.match(output, /未发出/);
   assert.doesNotMatch(output, /secret-key/);
 });
 
@@ -803,12 +804,14 @@ test("统计页 ↑↓ 切换 routeKind 过滤且不越界", () => {
   let state = openPage(createTuiState(buildCatalog(config), statsStatus), "stats");
   assert.equal(state.statsFilter, 0);
   assert.equal(selectedStatsFilter(state).id, "all");
+  // 路由失败不再是过滤项，键位只在剩余选项间循环。
+  assert.equal(STATS_FILTERS.some((option) => option.id === "unrouted"), false);
 
   state = moveSelection(state, 1);
   assert.equal(selectedStatsFilter(state).id, "warp");
   state = moveSelection(state, 10);
   assert.equal(state.statsFilter, STATS_FILTERS.length - 1);
-  assert.equal(selectedStatsFilter(state).id, "unrouted");
+  assert.equal(selectedStatsFilter(state).id, "overridden");
   state = moveSelection(state, -10);
   assert.equal(state.statsFilter, 0);
 });
@@ -878,8 +881,8 @@ test("parseStatusSnapshot 解析 stats 聚合与非法输入", () => {
   assert.ok(parsed);
   assert.equal(parsed?.stats?.enabled, true);
   assert.equal(parsed?.stats?.retentionDays, 30);
-  assert.equal(parsed?.stats?.aggregate?.overall.requests, 4);
-  assert.equal(parsed?.stats?.aggregate?.targets.length, 3);
+  assert.equal(parsed?.stats?.aggregate?.overall.requests, 3);
+  assert.equal(parsed?.stats?.aggregate?.targets.length, 2);
   assert.equal(
     parsed?.stats?.aggregate?.targets.some((target) => target.routeKind === "overridden"),
     true,
@@ -894,6 +897,45 @@ test("parseStatusSnapshot 解析 stats 聚合与非法输入", () => {
 
   const missing = parseStatusSnapshot({ port: 8787, configPath: "/tmp/config.jsonc" });
   assert.equal(missing?.stats, null);
+});
+
+test("旧 daemon 载荷里的 unrouted 目标仍能解析并渲染", () => {
+  const legacy = JSON.parse(JSON.stringify(statsStatus));
+  legacy.stats.aggregate.targets.push({
+    provider: null,
+    model: null,
+    endpoint: "/v1/responses",
+    routeKind: "unrouted",
+    requests: 2,
+    errors: 2,
+    aborted: 0,
+    errorRate: 1,
+    avgDurationMs: 1,
+    p50DurationMs: 10,
+    p95DurationMs: 10,
+    avgTtftMs: 0,
+    p95TtftMs: 0,
+    ttftSamples: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    cachedTokens: 0,
+    reasoningTokens: 0,
+    outputTokensPerSecond: null,
+    truncations: 0,
+    contentFiltered: 0,
+    streamRequests: 0,
+    nonStreamRequests: 2,
+  });
+  const parsed = parseStatusSnapshot(legacy);
+  assert.ok(parsed?.stats?.aggregate, "带 unrouted 目标的旧载荷不应解析失败");
+  assert.equal(parsed?.stats?.aggregate?.targets.length, 3);
+  const state = openPage(createTuiState(buildCatalog(config), parsed!), "stats");
+  const output = renderTui(state, { height: 30, width: 90 });
+  assert.match(output, /未发出\/—/);
+  for (const line of output.split("\n").filter((row) => /^[╭│╰]/.test(row))) {
+    assert.equal(visibleWidth(line), 90);
+  }
 });
 
 test("parseStatusSnapshot 兼容缺 aborted 的旧 daemon 聚合", () => {

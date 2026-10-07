@@ -272,8 +272,16 @@ export class AggregateAccumulator {
       state = { bucket: emptyBucket(), unrouted: emptyBucket(), hours: new Map(), targets: new Map() };
       this.days.set(day, state);
     }
+    // 请求从未发往上游：路由失败（配置里没有的模型/供应商）、请求体不可读（400）、
+    // API key 解析失败（500）。统一计入 unrouted，不进当天桶、小时桶或目标分组——
+    // 上游视图只描述真正到达上游的请求。state 仍要建，只有本地错误的一天也要留在
+    // days 里，这样 unrouted 计数与保留期裁剪逻辑不受影响。
+    if (event.routeKind === "unrouted") {
+      addToBucket(state.unrouted, event);
+      return;
+    }
+
     addToBucket(state.bucket, event);
-    if (event.routeKind === "unrouted") addToBucket(state.unrouted, event);
 
     const hour = hourKey(event.ts);
     let hourBucket = state.hours.get(hour);

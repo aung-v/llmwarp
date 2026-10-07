@@ -57,13 +57,18 @@ test("全错误与无 usage 的事件按边界处理", () => {
     event({ ok: false, status: 500, usage: null, durationMs: 50 }),
     event({ ok: false, status: 502, usage: null, durationMs: 150, routeKind: "unrouted", provider: null, model: null }),
   ]);
-  assert.equal(result.overall.requests, 2);
-  assert.equal(result.overall.errors, 2);
+  // unrouted 不进总体：overall 只描述真正发往上游的请求。
+  assert.equal(result.overall.requests, 1);
+  assert.equal(result.overall.errors, 1);
   assert.equal(result.overall.errorRate, 1);
   assert.equal(result.overall.inputTokens, 0);
   assert.equal(result.overall.outputTokensPerSecond, null);
+  // 仅 unrouted 事件被排除，真实上游错误仍留在 targets。
+  assert.equal(result.targets.some((target) => target.routeKind === "unrouted"), false);
+  assert.equal(result.targets.length, 1);
   assert.equal(result.unrouted.requests, 1);
   assert.equal(result.unrouted.errors, 1);
+  assert.equal(result.overall.requests + result.unrouted.requests, 2);
 });
 
 test("按天 / provider / model / endpoint / routeKind 分组并计算 p50/p95", () => {
@@ -77,12 +82,12 @@ test("按天 / provider / model / endpoint / routeKind 分组并计算 p50/p95",
     event({ ts: day2, durationMs: 500, provider: null, model: null, routeKind: "unrouted", ok: false, status: 400, usage: null }),
   ]);
 
-  assert.equal(result.overall.requests, 5);
-  assert.equal(result.overall.errors, 2);
-  assert.equal(result.overall.errorRate, 0.4);
-  assert.equal(result.overall.avgDurationMs, 300);
-  assert.equal(result.overall.p50DurationMs, 300);
-  assert.equal(result.overall.p95DurationMs, 500);
+  assert.equal(result.overall.requests, 4);
+  assert.equal(result.overall.errors, 1);
+  assert.equal(result.overall.errorRate, 0.25);
+  assert.equal(result.overall.avgDurationMs, 250);
+  assert.equal(result.overall.p50DurationMs, 200);
+  assert.equal(result.overall.p95DurationMs, 400);
   assert.equal(result.overall.inputTokens, 13);
   assert.equal(result.overall.outputTokens, 26);
   assert.equal(result.overall.cachedTokens, 4);
@@ -91,7 +96,7 @@ test("按天 / provider / model / endpoint / routeKind 分组并计算 p50/p95",
 
   assert.deepEqual(result.days.map((day) => day.day), ["2026-09-26", "2026-09-27"]);
   assert.equal(result.days[0].requests, 2);
-  assert.equal(result.days[1].requests, 3);
+  assert.equal(result.days[1].requests, 2);
 
   // 只出现 provider=null 的组不会把错误算进任何供应商的错误率分母
   const alpha = result.targets.find((target) => target.provider === "alpha");
@@ -110,9 +115,14 @@ test("按天 / provider / model / endpoint / routeKind 分组并计算 p50/p95",
   assert.equal(result.unrouted.requests, 1);
   assert.equal(result.unrouted.errors, 1);
 
-  // 路由失败组独立存在，provider 为 null
-  const unroutedTarget = result.targets.find((target) => target.routeKind === "unrouted");
-  assert.equal(unroutedTarget?.provider, null);
+  // 路由失败不进目标分组：targets 中不存在 unrouted，且总体请求数等于各目标之和。
+  assert.equal(result.targets.some((target) => target.routeKind === "unrouted"), false);
+  assert.equal(result.targets.every((target) => target.provider !== null), true);
+  assert.equal(
+    result.targets.reduce((sum, target) => sum + target.requests, 0),
+    result.overall.requests,
+  );
+  assert.equal(result.overall.requests + result.unrouted.requests, 5);
 });
 
 test("tok/s 只统计流式样本：非流式不参与", () => {

@@ -78,7 +78,6 @@ export const STATS_FILTERS: StatsFilterOption[] = [
   { id: "explicit", label: "按客户端" },
   { id: "fallback", label: "未指定模型" },
   { id: "overridden", label: "被开关覆盖" },
-  { id: "unrouted", label: "路由失败" },
 ];
 
 /** 火花线指标：token 总量 / 请求数。 */

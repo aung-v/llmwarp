@@ -146,7 +146,10 @@ async function readStatus(port: number, token: string): Promise<StatsPayload> {
 async function waitForRequests(port: number, token: string, count: number): Promise<StatsPayload> {
   for (let attempt = 0; attempt < 50; attempt += 1) {
     const status = await readStatus(port, token);
-    if ((status.stats.aggregate?.overall.requests ?? 0) >= count) return status;
+    // 客户端总请求数 = 发往上游的请求 + 未发出的请求。
+    const aggregate = status.stats.aggregate;
+    const total = (aggregate?.overall.requests ?? 0) + (aggregate?.unrouted.requests ?? 0);
+    if (total >= count) return status;
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   throw new Error(`统计未在预期时间内达到 ${count} 条：${JSON.stringify(await readStatus(port, token))}`);
@@ -220,10 +223,16 @@ test("统计按解析后的真实上游归属，unrouted 不进供应商错误�
   const status = await waitForRequests(port, handle.token, 6);
   const aggregatePayload = status.stats.aggregate;
   assert.ok(aggregatePayload);
-  assert.equal(aggregatePayload.overall.requests, 6);
-  assert.equal(aggregatePayload.overall.errors, 2);
+  // 6 条事件里 2 条是路由失败：overall 只覆盖真正发往上游的 4 条，unrouted 单独计数。
+  assert.equal(aggregatePayload.overall.requests, 4);
+  assert.equal(aggregatePayload.overall.errors, 0);
   assert.equal(aggregatePayload.unrouted.requests, 2);
   assert.equal(aggregatePayload.unrouted.errors, 2);
+  assert.equal(aggregatePayload.overall.requests + aggregatePayload.unrouted.requests, 6);
+  assert.equal(
+    aggregatePayload.targets.reduce((sum, target) => sum + target.requests, 0),
+    aggregatePayload.overall.requests,
+  );
 
   const alphaTargets = aggregatePayload.targets.filter((target) => target.provider === "alpha");
   assert.equal(alphaTargets.length, 4);
@@ -236,11 +245,9 @@ test("统计按解析后的真实上游归属，unrouted 不进供应商错误�
   );
   const fallbackTarget = alphaTargets.find((target) => target.routeKind === "fallback");
   assert.equal(fallbackTarget?.model, null);
-  const unroutedTargets = aggregatePayload.targets.filter((target) => target.routeKind === "unrouted");
-  assert.equal(unroutedTargets.length, 1);
-  assert.equal(unroutedTargets[0].provider, null);
-  // 没有任何 provider 分组是 unrouted 或携带 provider=null
-  assert.equal(aggregatePayload.targets.every((target) => target.provider !== null || target.routeKind === "unrouted"), true);
+  // 路由失败不产生目标分组：targets 里既没有 unrouted，也没有 provider=null 的行。
+  assert.equal(aggregatePayload.targets.some((target) => target.routeKind === "unrouted"), false);
+  assert.equal(aggregatePayload.targets.every((target) => target.provider !== null), true);
 
   // 上游请求体：include_usage 仅在流式 chat/completions 注入；overridden 落到 alpha 且改写模型
   assert.equal(alpha.requests.length, 4);
