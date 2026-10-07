@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 15
+- **Total Sessions**: 16
 - **Last Active**: 2026-10-07
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~420 | Active |
+| `journal-1.md` | ~460 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 16 | 2026-10-07 | TUI 重绘残留：帧必须每行等宽且不超终端高度 | `224bad8`, `0439bb2` | `master` |
 | 15 | 2026-10-07 | 统计只按上游归属，大数单位统一 K/M/G | `acc88ed`, `adf36d0` | `master` |
 | 14 | 2026-10-07 | 统计表格 tok/s 列 + 大数 k/M + 分位白话化 | `6c48812` | `master` |
 | 13 | 2026-10-07 | TUI 重启反馈竞态：陈旧刷新覆盖在途动作 | `f54350a` | `master` |

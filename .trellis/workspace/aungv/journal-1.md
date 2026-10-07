@@ -418,3 +418,43 @@ Follow-up to the stats feature, done outside a Trellis task at the user's reques
 
 - 用户重启 8787 daemon 后生效（TUI 改动只需重启 TUI）
 - 统计页后续向 TUI 风格继续迭代
+
+
+## Session 16: TUI 重绘残留：帧必须每行等宽且不超终端高度
+<!-- trellis-session: v=2 fp=28cf7a3a47c98784 -->
+
+**Date**: 2026-10-07
+**Task**: TUI 重绘残留：帧必须每行等宽且不超终端高度
+**Branch**: `master`
+
+### Summary
+
+在 TUI 里重启 daemon 时，屏幕上会永久挂着假的「处理中…」：draw() 只用 ESC[J 清屏擦不掉同一行的旧尾巴，表头/页脚又没补满宽度；同时确认框弹出时整帧会顶破 height 让终端滚动错位。两处一起修。
+
+### Main Changes
+
+- src/tui/render.ts：renderTui() 的每一行统一走 pad(line, width)，帧成为固定矩形，下一帧逐格覆盖上一帧
+- src/tui/render.ts：反馈面板只在剩余高度 ≥3 时绘制，并在收尾处 body.slice(0, maxBody) 兜底，整帧永不超过 height（页脚与确认框优先保留）
+- test/tui.test.ts：矩形回归测试同时断言每行等宽与行数不超 height，覆盖导航提示 / 处理中 / 结束 / 切换确认框 与 22/24/30 高度
+- spec：interaction-guidelines 写明「每帧是固定矩形」两条不变量，以及 ESC[J 与 Math.max(…,5) 这两个踩坑经过
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `224bad8` | fix(tui): 整帧重绘必须每行等宽且不超终端高度 |
+| `0439bb2` | chore(task): archive 10-07-tui-frame-leftover |
+
+### Testing
+
+- [OK] npm run typecheck / npm run build / npm test 全绿，169 pass / 0 fail
+- [OK] 终端模拟器回放真实字节流：同一条按键路径修复前第 2 行残留「处理中…  ↑↓ 进入列表」，修复后干净
+- [OK] 278 个可达状态 × 宽 72/80/100/160 × 高 22/24/26/30/40/60 共 6672 组，等宽与高度不变量 0 失败；去掉修复后回归测试确实失败
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 用户重启 TUI 即可看到；8787 daemon 不受影响
