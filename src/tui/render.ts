@@ -346,6 +346,28 @@ function shortEndpoint(endpoint: string): string {
   return endpoint.replace(/^\/v1(?=\/|$)/, "").replace(/^\/+/, "") || endpoint;
 }
 
+/**
+ * 大数友好显示：计数类与 token 类统一折算 k / M / G，保留 1 位小数并去掉多余的 `.0`。
+ * 阈值取 999.5 / 999_950 / 999_950_000，避免出现 `1000.0k` 这种进位后仍然越级的写法。
+ */
+export function formatCount(value: number): string {
+  const scale = (divisor: number, unit: string): string => {
+    const text = (value / divisor).toFixed(1);
+    return `${text.endsWith(".0") ? text.slice(0, -2) : text}${unit}`;
+  };
+  const abs = Math.abs(value);
+  if (abs >= 999_950_000) return scale(1_000_000_000, "G");
+  if (abs >= 999_950) return scale(1_000_000, "M");
+  if (abs >= 999.5) return scale(1_000, "k");
+  return String(value);
+}
+
+/** tok/s：小于 1000 时保留聚合层的两位小数（0.02 tok/s 本身是有意义的），超过才折算。 */
+function formatRate(rate: number | null): string {
+  if (rate === null) return "—";
+  return rate < 1_000 ? String(rate) : formatCount(rate);
+}
+
 function percent(rate: number): string {
   const value = rate * 100;
   return `${value >= 10 || value === 0 ? value.toFixed(0) : value.toFixed(1)}%`;
@@ -380,11 +402,11 @@ function statsDetailRows(target: TargetAggregate | null): string[] {
     pc.bold(
       `选中详情  ${sanitize(target.provider ?? "未发出")}/${sanitize(target.model ?? "—")} · ${sanitize(shortEndpoint(target.endpoint))} · ${ROUTE_KIND_LABELS[target.routeKind]}`,
     ),
-    `  延迟   平均 ${target.avgDurationMs}ms · p50 ${target.p50DurationMs}ms · p95 ${target.p95DurationMs}ms`,
-    `         TTFT 平均 ${hasTtft ? `${target.avgTtftMs}ms` : "—"} · TTFT p95 ${hasTtft ? `${target.p95TtftMs}ms` : "—"} · 样本 ${target.ttftSamples}`,
-    `  吞吐   ${target.outputTokensPerSecond ?? "—"} tok/s · 流式 ${target.streamRequests} · 非流式 ${target.nonStreamRequests}`,
-    `  token  输入 ${target.inputTokens} · 输出 ${target.outputTokens} · 总 ${target.totalTokens} · 缓存 ${target.cachedTokens} · 推理 ${target.reasoningTokens}`,
-    `  可靠性 请求 ${target.requests} · 错误 ${target.errors}（${percent(target.errorRate)}）· 中断 ${target.aborted} · 截断 ${target.truncations} · 拦截 ${target.contentFiltered}`,
+    `  延迟   平均 ${target.avgDurationMs}ms · 50分位 ${target.p50DurationMs}ms · 95分位 ${target.p95DurationMs}ms`,
+    `         TTFT 平均 ${hasTtft ? `${target.avgTtftMs}ms` : "—"} · TTFT 95分位 ${hasTtft ? `${target.p95TtftMs}ms` : "—"} · 样本 ${formatCount(target.ttftSamples)}`,
+    `  吞吐   ${formatRate(target.outputTokensPerSecond)} tok/s · 流式 ${formatCount(target.streamRequests)} · 非流式 ${formatCount(target.nonStreamRequests)}`,
+    `  token  输入 ${formatCount(target.inputTokens)} · 输出 ${formatCount(target.outputTokens)} · 总 ${formatCount(target.totalTokens)} · 缓存 ${formatCount(target.cachedTokens)} · 推理 ${formatCount(target.reasoningTokens)}`,
+    `  可靠性 请求 ${formatCount(target.requests)} · 错误 ${formatCount(target.errors)}（${percent(target.errorRate)}）· 中断 ${formatCount(target.aborted)} · 截断 ${formatCount(target.truncations)} · 拦截 ${formatCount(target.contentFiltered)}`,
   ];
 }
 
@@ -427,12 +449,12 @@ function statsRows(state: TuiState, height: number, width: number): string[] {
   rows.push(
     pc.dim(`区间  最近 ${snapshot.retentionDays} 天 · ${days.length} 天有数据 · ${rangeLabel}`),
     `${metric === "tokens" ? "Token" : "请求"} ${spark || "—"}`,
-    `汇总  请求 ${overall.requests} · 错误 ${overall.errors}（${percent(overall.errorRate)}）· 平均 ${overall.avgDurationMs}ms · p95 ${overall.p95DurationMs}ms`,
+    `汇总  请求 ${formatCount(overall.requests)} · 错误 ${formatCount(overall.errors)}（${percent(overall.errorRate)}）· 平均 ${overall.avgDurationMs}ms · 95分位 ${overall.p95DurationMs}ms`,
     pc.dim(
-      `      TTFT 平均 ${overall.ttftSamples > 0 ? `${overall.avgTtftMs}ms` : "—"} · 输出 ${overall.outputTokensPerSecond ?? "—"} tok/s · 截断 ${overall.truncations} · 拦截 ${overall.contentFiltered} · 中断 ${overall.aborted}`,
+      `      TTFT 平均 ${overall.ttftSamples > 0 ? `${overall.avgTtftMs}ms` : "—"} · 输出 ${formatRate(overall.outputTokensPerSecond)} tok/s · 截断 ${formatCount(overall.truncations)} · 拦截 ${formatCount(overall.contentFiltered)} · 中断 ${formatCount(overall.aborted)}`,
     ),
     pc.dim(
-      `      token 输入 ${overall.inputTokens} · 输出 ${overall.outputTokens} · 缓存 ${overall.cachedTokens} · 推理 ${overall.reasoningTokens}`,
+      `      token 输入 ${formatCount(overall.inputTokens)} · 输出 ${formatCount(overall.outputTokens)} · 缓存 ${formatCount(overall.cachedTokens)} · 推理 ${formatCount(overall.reasoningTokens)}`,
     ),
   );
 
@@ -451,20 +473,23 @@ function statsRows(state: TuiState, height: number, width: number): string[] {
       option.id === filter.id ? pc.bgBlue(pc.white(` ${option.label} `)) : pc.dim(option.label),
     ).join(" ")}`,
     pc.dim(
-      `      命中 ${filteredRequests} 请求 · 错误 ${filteredErrors} · 未发出 ${aggregate.unrouted.requests}${filtered.length > shown ? ` · 表格显示 ${shown}/${filtered.length} 行` : ""}`,
+      `      命中 ${formatCount(filteredRequests)} 请求 · 错误 ${formatCount(filteredErrors)} · 未发出 ${formatCount(aggregate.unrouted.requests)}${filtered.length > shown ? ` · 表格显示 ${shown}/${filtered.length} 行` : ""}`,
     ),
   );
 
-  // 8 列（供应商/模型 · 端点 · 路由 · 请求 · 错误率 · 平均 · TTFT · p95）：固定宽度 54 + 7 个空格。
-  const labelWidth = Math.max(width - 61, 8);
+  // 8 列（供应商/模型 · 端点 · 路由 · 请求 · 错误率 · 平均 · TTFT · tok/s）：固定宽度 55 + 7 个空格。
+  // p95 不再进表格（总耗时 p95 混着回答长度，价值低于 TTFT / tok/s），留在选中详情。
+  // 窄终端先牺牲「端点」列（详情里仍有），保证 TTFT / tok/s 这些数值列不被截断。
   const endpointWidth = 16;
   const routeWidth = 7;
+  const showEndpoint = width - 62 >= 12;
+  const labelWidth = Math.max(width - (showEndpoint ? 62 : 45), 8);
   if (filtered.length === 0) {
     rows.push("", pc.dim("该过滤条件下暂无请求"));
   } else if (tableSpace >= 1) {
     rows.push(
       pc.bold(
-        `${pad("供应商 / 模型", labelWidth)} ${pad("端点", endpointWidth)} ${pad("路由", routeWidth)} ${rightAlign("请求", 5)} ${rightAlign("错误率", 7)} ${rightAlign("平均", 6)} ${rightAlign("TTFT", 6)} ${rightAlign("p95", 7)}`,
+        `${pad("供应商 / 模型", labelWidth)} ${showEndpoint ? `${pad("端点", endpointWidth)} ` : ""}${pad("路由", routeWidth)} ${rightAlign("请求", 6)} ${rightAlign("错误率", 7)} ${rightAlign("平均", 6)} ${rightAlign("TTFT", 6)} ${rightAlign("tok/s", 7)}`,
       ),
       pc.dim("─".repeat(Math.max(width, 10))),
     );
@@ -472,7 +497,7 @@ function statsRows(state: TuiState, height: number, width: number): string[] {
       // 旧载荷可能仍带 provider 为空的目标（新代码不再产生）；标签与过滤行统一用「未发出」。
       const label = `${sanitize(target.provider ?? "未发出")}/${sanitize(target.model ?? "—")}`;
       const ttft = target.ttftSamples > 0 ? `${target.avgTtftMs}ms` : "—";
-      const line = `${pad(label, labelWidth)} ${pad(shortEndpoint(sanitize(target.endpoint)), endpointWidth)} ${pad(ROUTE_KIND_SHORT[target.routeKind], routeWidth)} ${rightAlign(String(target.requests), 5)} ${rightAlign(percent(target.errorRate), 7)} ${rightAlign(`${target.avgDurationMs}ms`, 6)} ${rightAlign(ttft, 6)} ${rightAlign(`${target.p95DurationMs}ms`, 7)}`;
+      const line = `${pad(label, labelWidth)} ${showEndpoint ? `${pad(shortEndpoint(sanitize(target.endpoint)), endpointWidth)} ` : ""}${pad(ROUTE_KIND_SHORT[target.routeKind], routeWidth)} ${rightAlign(formatCount(target.requests), 6)} ${rightAlign(percent(target.errorRate), 7)} ${rightAlign(`${target.avgDurationMs}ms`, 6)} ${rightAlign(ttft, 6)} ${rightAlign(formatRate(target.outputTokensPerSecond), 7)}`;
       rows.push(index === selectedIndex ? pc.bgBlue(pc.white(line)) : line);
     });
   }

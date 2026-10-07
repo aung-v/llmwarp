@@ -34,7 +34,7 @@ import {
   type TuiPage,
   type TuiState,
 } from "../src/tui/model.js";
-import { renderTui, visibleWidth } from "../src/tui/render.js";
+import { formatCount, renderTui, visibleWidth } from "../src/tui/render.js";
 import type { Config } from "../src/config.js";
 import { AggregateAccumulator } from "../src/stats/aggregate.js";
 import type { RequestEvent } from "../src/stats/event.js";
@@ -907,8 +907,8 @@ test("统计页选中目标详情覆盖延迟 / 吞吐 / token / 可靠性全部
   const output = renderTui(state, { height: 34, width: 100 });
 
   assert.match(output, /选中详情\s+ark\/glm-5\.3-flash · chat\/completions · warp 别名/);
-  assert.match(output, /平均 560ms · p50 150ms · p95 1000ms/);
-  assert.match(output, /TTFT 平均 200ms · TTFT p95 200ms · 样本 1/);
+  assert.match(output, /平均 560ms · 50分位 150ms · 95分位 1000ms/);
+  assert.match(output, /TTFT 平均 200ms · TTFT 95分位 200ms · 样本 1/);
   assert.match(output, /吞吐\s+25 tok\/s · 流式 1 · 非流式 1/);
   assert.match(output, /token\s+输入 110 · 输出 220 · 总 330 · 缓存 50 · 推理 5/);
   assert.match(output, /可靠性 请求 2 · 错误 0（0%）· 中断 0 · 截断 0 · 拦截 0/);
@@ -916,8 +916,8 @@ test("统计页选中目标详情覆盖延迟 / 吞吐 / token / 可靠性全部
   // 选中行变化后详情跟随（第二个目标是「被开关覆盖」）。
   const movedOutput = renderTui(moveSelection(state, 1), { height: 34, width: 100 });
   assert.match(movedOutput, /选中详情\s+ark\/glm-5\.3-flash · chat\/completions · 被开关覆盖/);
-  assert.match(movedOutput, /平均 300ms · p50 300ms · p95 300ms/);
-  assert.match(movedOutput, /TTFT 平均 — · TTFT p95 — · 样本 0/);
+  assert.match(movedOutput, /平均 300ms · 50分位 300ms · 95分位 300ms/);
+  assert.match(movedOutput, /TTFT 平均 — · TTFT 95分位 — · 样本 0/);
   assert.match(movedOutput, /吞吐\s+— tok\/s · 流式 0 · 非流式 1/);
   assert.match(movedOutput, /可靠性 请求 1 · 错误 1（100%）· 中断 0 · 截断 0 · 拦截 0/);
 });
@@ -985,12 +985,69 @@ test("统计页窄窗口下优先保留选中目标详情并报告隐藏行数",
   }
   // 表格让位，详情五行一个都不少。
   assert.match(output, /选中详情/);
-  assert.match(output, /平均 560ms · p50 150ms · p95 1000ms/);
-  assert.match(output, /TTFT 平均 200ms · TTFT p95 200ms · 样本 1/);
+  assert.match(output, /平均 560ms · 50分位 150ms · 95分位 1000ms/);
+  assert.match(output, /TTFT 平均 200ms · TTFT 95分位 200ms · 样本 1/);
   assert.match(output, /吞吐\s+25 tok\/s · 流式 1 · 非流式 1/);
   assert.match(output, /推理 5/);
   assert.match(output, /可靠性 请求 2 · 错误 0（0%）· 中断 0 · 截断 0 · 拦截 0/);
   assert.match(output, /表格显示 \d\/2 行/);
+  // 72 列窄终端：牺牲「端点」列，保住 TTFT / tok/s 这类数值列。
+  assert.match(output, /tok\/s/);
+  assert.doesNotMatch(output, /端点/);
+});
+
+test("formatCount 把大数折算成 k / M / G", () => {
+  assert.equal(formatCount(0), "0");
+  assert.equal(formatCount(999), "999");
+  assert.equal(formatCount(999.5), "1k");
+  assert.equal(formatCount(1000), "1k");
+  assert.equal(formatCount(1200), "1.2k");
+  assert.equal(formatCount(205460), "205.5k");
+  assert.equal(formatCount(999949), "999.9k");
+  assert.equal(formatCount(999950), "1M");
+  assert.equal(formatCount(31575899), "31.6M");
+  assert.equal(formatCount(999950000), "1G");
+});
+
+test("统计页表格直接给出 tok/s，p95 / p50 只留在选中详情", () => {
+  const state = openPage(createTuiState(buildCatalog(config), statsStatus), "stats");
+  const output = renderTui(state, { height: 34, width: 100 });
+  const header = output.split("\n").find((line) => line.includes("供应商 / 模型")) ?? "";
+
+  assert.match(header, /tok\/s/);
+  assert.doesNotMatch(header, /p95/);
+  assert.match(output, /25 tok\/s/, "表格与详情都要能看到 tok/s");
+  assert.match(output, /95分位 1000ms/);
+  assert.match(output, /TTFT 95分位 200ms/);
+  assert.doesNotMatch(output, /p50|p95/);
+  for (const line of output.split("\n").filter((row) => /^[╭│╰]/.test(row))) {
+    assert.equal(visibleWidth(line), 100);
+  }
+});
+
+test("统计页把 token 大数折算成 k / M", () => {
+  const accumulator = new AggregateAccumulator();
+  const sample = sampleStatsEvents();
+  accumulator.add({
+    ...sample[1],
+    usage: {
+      input: 12_000_000,
+      output: 1_250_000,
+      total: 13_250_000,
+      cached: 3_400_000,
+      reasoning: 999_400,
+    },
+  });
+  const aggregate = accumulator.snapshot(new Date(2026, 8, 27, 12, 0, 0).getTime(), 30);
+  const state = openPage(
+    createTuiState(buildCatalog(config), {
+      ...status,
+      stats: { enabled: true, retentionDays: 30, aggregate },
+    }),
+    "stats",
+  );
+  const output = renderTui(state, { height: 34, width: 100 });
+  assert.match(output, /输入 12M · 输出 1\.3M · 总 13\.3M · 缓存 3\.4M · 推理 999\.4k/);
 });
 
 test("统计页 Enter 在 token / 请求数之间切换", () => {
