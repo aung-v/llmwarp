@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 14
+- **Total Sessions**: 15
 - **Last Active**: 2026-10-07
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~379 | Active |
+| `journal-1.md` | ~420 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 15 | 2026-10-07 | 统计只按上游归属，大数单位统一 K/M/G | `acc88ed`, `adf36d0` | `master` |
 | 14 | 2026-10-07 | 统计表格 tok/s 列 + 大数 k/M + 分位白话化 | `6c48812` | `master` |
 | 13 | 2026-10-07 | TUI 重启反馈竞态：陈旧刷新覆盖在途动作 | `f54350a` | `master` |
 | 12 | 2026-10-07 | 统计指标出口矩阵：选中目标详情 + 小时火花线 + spec 契约 | `d25ef00` | `master` |

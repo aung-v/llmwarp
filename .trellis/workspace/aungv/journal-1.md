@@ -377,3 +377,44 @@ Follow-up to the stats feature, done outside a Trellis task at the user's reques
 ### Status
 
 [OK] **Completed**
+
+
+## Session 15: 统计只按上游归属，大数单位统一 K/M/G
+<!-- trellis-session: v=2 fp=514b1327e8fe7e75 -->
+
+**Date**: 2026-10-07
+**Task**: 统计只按上游归属，大数单位统一 K/M/G
+**Branch**: `master`
+
+### Summary
+
+统计页去掉 routeKind 维度与「路由」列/过滤行，聚合键改为 provider+model+endpoint；formatCount 单位统一为大写 K/M/G；spec 与 README 同步。
+
+### Main Changes
+
+- src/stats/aggregate.ts：targetKey 改为 provider + model + endpoint，TargetAggregate/TargetState 去掉 routeKind；unrouted 仍单独成桶
+- src/tui/：删除 路由 列、routeKind 过滤行、f 键与 STATS_FILTERS/cycleStatsFilter/selectedStatsFilter/filteredStatsTargets；新增 statsTargets()；选中目标按 provider/model/endpoint 重定位；旧载荷的 routeKind 解析后忽略
+- 端点列改为常量列隐藏：可见行 endpoint 唯一或终端 <78 列时不显示；固定宽度 37/54
+- formatCount()：k → K，三个单位一律大写
+- spec：usage-stats 归属/列构成/常量列隐藏、interaction-guidelines 键位表、state-management 视图状态四件变三件；README 统计页说明同步
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `acc88ed` | feat(stats): attribute statistics to the upstream only |
+| `adf36d0` | chore(task): archive 10-07-stats-drop-routekind |
+
+### Testing
+
+- [OK] npm run typecheck 通过；npm run build 通过；npm test 167 pass / 0 fail
+- [OK] trellis-check：核对跨层调用方、无被放宽的断言，并修正 spec 阈值（面板宽度 = 终端 - 4，端点列实际门槛 ≥78 列）
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 用户重启 8787 daemon 后生效（TUI 改动只需重启 TUI）
+- 统计页后续向 TUI 风格继续迭代
