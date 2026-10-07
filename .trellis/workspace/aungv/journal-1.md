@@ -225,3 +225,25 @@ Follow-up to the stats feature, done outside a Trellis task at the user's reques
 ### Status
 
 [OK] **Completed**
+
+
+## Session 10: Fix latency and throughput metric semantics
+<!-- trellis-session: v=2 fp=4f8e7116ebf2be39 -->
+
+**Date**: 2026-10-07
+**Task**: Fix latency and throughput metric semantics
+**Branch**: `master`
+
+### Summary
+
+统计口径修正：client_aborted 不再进 avg/p50/p95（新增 Bucket.timed 作为时延分母，修前 9 条 100ms 取消会把 p50 从 10000 拉到 100）；tok/s 只统计流式且拿到 TTFT 的样本，非流式不再退化成整段 duration（修前同一生成流式/非流式相差 16 倍），全非流式为 null；TUI 汇总行无 TTFT 样本时显示 —。版本保持 1.1.0，测试 154/154。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `fb71763` | fix(stats): exclude cancels from latency, single throughput definition |
+
+### Status
+
+[OK] **Completed**
