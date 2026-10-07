@@ -458,3 +458,40 @@ Follow-up to the stats feature, done outside a Trellis task at the user's reques
 ### Next Steps
 
 - 用户重启 TUI 即可看到；8787 daemon 不受影响
+
+
+## Session 17: TUI 重绘残留（二）：右下角落笔会滚屏
+<!-- trellis-session: v=2 fp=7540de252dbb9cd2 -->
+
+**Date**: 2026-10-07
+**Task**: TUI 重绘残留（二）：右下角落笔会滚屏
+**Branch**: `master`
+
+### Summary
+
+整帧补满宽度后，确认框/处理中这类状态整帧刚好占满终端高度，页脚补到第 width 格；conhost 类终端在右下角落笔会立刻回绕滚屏，一滚屏上一帧就露出来，看起来就是「导航栏显示两层」。
+
+### Main Changes
+
+- src/tui/render.ts：renderTui() 最后一行只补到 width - 1，永远不写屏幕右下角那一格
+- test/tui.test.ts：矩形回归测试改为「除最后一行外每行 = width，最后一行 = width - 1」
+- spec：interaction-guidelines 的固定矩形不变量补上第三条（不写右下角），并记下三类帧尺寸坑
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `741da3d` | fix(tui): 永远不写屏幕右下角那一格 |
+
+### Testing
+
+- [OK] 延迟回绕 + 右下角滚屏的终端模型回放真实字节流：修复前滚屏 5 次、画面整体上移；修复后 0 次
+- [OK] npm run typecheck / npm run build / npm test 全绿，169 pass / 0 fail
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 用户重启 TUI 后确认；若仍复现，需要 rows/cols 与实际终端尺寸
