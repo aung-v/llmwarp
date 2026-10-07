@@ -247,3 +247,25 @@ Follow-up to the stats feature, done outside a Trellis task at the user's reques
 ### Status
 
 [OK] **Completed**
+
+
+## Session 11: Restrict statistics to upstream requests
+<!-- trellis-session: v=2 fp=dabd9b391bd719d9 -->
+
+**Date**: 2026-10-07
+**Task**: Restrict statistics to upstream requests
+**Branch**: `master`
+
+### Summary
+
+统计只覆盖真正发往上游的请求：AggregateAccumulator 对 unrouted 提前 return，不再进当天桶/小时桶/目标分组，只保留单独计数；不变式 overall.requests === Σ targets.requests 且 overall + unrouted === 客户端总数。语义澄清：该桶覆盖所有从未发往上游的情况（路由失败、请求体 400、API key 500），TUI 标签统一改为「未发出」；移除恒为空的「路由失败」过滤项并补旧载荷兼容测试。版本保持 1.1.0，测试 155/155。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `28c1568` | fix(stats): count only requests that reached an upstream |
+
+### Status
+
+[OK] **Completed**
