@@ -660,7 +660,11 @@ export function renderTui(
   // 滚动、整屏错位。把每行补齐/截断到 width，并在超高的极端情况下从 body 截掉多余
   // 行（页脚与确认框永远保留），下一帧就会逐格覆盖上一帧。
   const maxBody = Math.max(height - header.length - noticeRows.length - footer.length, 0);
-  return [...header, ...body.slice(0, maxBody), ...noticeRows, ...footer]
-    .map((line) => pad(line, width))
+  const lines = [...header, ...body.slice(0, maxBody), ...noticeRows, ...footer];
+  // 最后一行少写一格：终端在右下角那一格会立刻回绕并滚屏（conhost 等），一滚屏上一帧
+  // 就露出来，看起来像「显示了两层」。右下角空一格肉眼看不出来，但滚动没有了。
+  const lastIndex = lines.length - 1;
+  return lines
+    .map((line, index) => pad(line, index === lastIndex ? width - 1 : width))
     .join("\n");
 }

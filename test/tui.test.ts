@@ -363,13 +363,15 @@ test("整帧重绘要求矩形：每行等宽且不超 height，导航提示 / �
           lines.length <= height,
           `${label} 在 ${height}x${width} 下渲染 ${lines.length} 行，写下去会让终端滚动`,
         );
-        for (const line of lines) {
+        lines.forEach((line, index) => {
+          // 最后一行留出右下角那一格：终端在那里会立刻回绕滚屏，一滚屏上一帧就露出来。
+          const expected = index === lines.length - 1 ? width - 1 : width;
           assert.equal(
             visibleWidth(line),
-            width,
+            expected,
             `${label} 在 width=${width} 下存在非等宽行，ESC[J 会留下上一帧的尾巴`,
           );
-        }
+        });
       }
     }
   }
