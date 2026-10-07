@@ -80,6 +80,56 @@
 - **Denominators**: `client_aborted` events are counted in `aborted` and excluded from failures: `errorRate = errors / max(requests - aborted, 1)`. Because `requests` is upstream-only, a routing failure cannot inflate a provider's rate either (`errors` covers status >= 400 and `upstream_error`). The guard keeps the rate finite when `requests` is 0 or every request was cancelled.
 - **Transparency**: `/v1` response bytes, status codes, and SSE chunk order must be identical with and without collection.
 
+#### 指标出口矩阵（Metric × Dimension × Outlet）
+
+每个采集到的字段都必须在这里有一行：**新增字段必须同时补矩阵行和至少一个展示出口**，
+否则视为未完成。反向约束：`AggregateMetrics` 的字段集合必须与本表
+`aggregate-metrics-matrix` 区块的字段集合完全一致（`test/stats-aggregate.test.ts` 断言），
+防止「算了但界面上看不到」的死指标再次出现。
+
+维度：`overall`（全量）/ `days`（按天）/ `hours`（按小时）/ `targets`（按上游目标：
+provider + model + endpoint + routeKind）/ `unrouted`（从未到达上游）。除 `unrouted` 外
+所有维度都由同一份 `Bucket` 计算，因此下面每个字段在这五层里都可用。
+
+<!-- aggregate-metrics-matrix:start -->
+| 字段 | 支持维度 | 展示出口（TUI 统计页） |
+|---|---|---|
+| `requests` | overall, days, hours, targets, unrouted | 汇总行「请求」；目标表格「请求」列；选中详情「可靠性」；过滤行「命中 / 未发出」 |
+| `errors` | overall, days, hours, targets, unrouted | 汇总行「错误」；过滤行「错误」；选中详情「可靠性」 |
+| `aborted` | overall, days, hours, targets, unrouted | 汇总行「中断」；选中详情「可靠性」 |
+| `errorRate` | overall, days, hours, targets, unrouted | 汇总行百分比；目标表格「错误率」列；选中详情「可靠性」 |
+| `avgDurationMs` | overall, days, hours, targets, unrouted | 汇总行「平均」；目标表格「平均」列；选中详情「延迟」 |
+| `p50DurationMs` | overall, days, hours, targets, unrouted | 选中详情「延迟」p50 |
+| `p95DurationMs` | overall, days, hours, targets, unrouted | 汇总行「p95」；目标表格「p95」列；选中详情「延迟」p95 |
+| `avgTtftMs` | overall, days, hours, targets, unrouted | 汇总行「TTFT 平均」；目标表格「TTFT」列；选中详情「延迟」TTFT 平均 |
+| `p95TtftMs` | overall, days, hours, targets, unrouted | 选中详情「延迟」TTFT p95 |
+| `ttftSamples` | overall, days, hours, targets, unrouted | 选中详情「延迟」样本数；为 0 时上面两个 TTFT 出口显示 `—` |
+| `inputTokens` | overall, days, hours, targets, unrouted | 汇总行 token 行「输入」；选中详情「token」 |
+| `outputTokens` | overall, days, hours, targets, unrouted | 汇总行 token 行「输出」；选中详情「token」 |
+| `totalTokens` | overall, days, hours, targets, unrouted | 火花线（`tokens` 指标）；选中详情「token」总 |
+| `cachedTokens` | overall, days, hours, targets, unrouted | 汇总行 token 行「缓存」；选中详情「token」 |
+| `reasoningTokens` | overall, days, hours, targets, unrouted | 汇总行 token 行「推理」；选中详情「token」 |
+| `outputTokensPerSecond` | overall, days, hours, targets, unrouted | 汇总行「输出 … tok/s」；选中详情「吞吐」 |
+| `truncations` | overall, days, hours, targets, unrouted | 汇总行「截断」；选中详情「可靠性」 |
+| `contentFiltered` | overall, days, hours, targets, unrouted | 汇总行「拦截」；选中详情「可靠性」 |
+| `streamRequests` | overall, days, hours, targets, unrouted | 选中详情「吞吐」流式 |
+| `nonStreamRequests` | overall, days, hours, targets, unrouted | 选中详情「吞吐」非流式 |
+<!-- aggregate-metrics-matrix:end -->
+
+**出口规则**：
+
+- 汇总行只展示 `overall`；目标表格 + 选中详情展示 `targets` 中当前选中的那一个；火花线按
+  `days`（按天）或 `hours`（按小时，取最近 24 个活跃小时，稀疏桶不补零）切换。
+- 选中详情是 `targets` 层的完整出口：`AggregateMetrics` 的 20 个字段必须全部出现在
+  `src/tui/render.ts` 的 `statsDetailRows()` 里，缺一个就是死指标。
+- 只落盘、不聚合的请求级字段（`requestedModel`、`routingMode`）是归因审计字段：它们解释
+  一条请求为什么落到某个上游目标，只在排障时直接读 JSONL，不进 TUI。
+- `rateLimit`（上游 `x-ratelimit-*`）同样只落盘、不聚合、**暂不展示**：它是响应那一刻的瞬时值，
+  删掉就无法回溯补采，但也不能加总或求分位（加总无意义，且它不是 `AggregateMetrics` 的数值
+  字段）。展示它需要「按目标的最新配额」视图，属于限流面板范畴，本期不做。
+  **复查条件**：若要做配额/限流面板，先把 `RequestEvent.rateLimit` 聚合成 `targets[].rateLimit`
+  （最后一个样本，不参与 `AggregateMetrics` 的加总），再补本矩阵行。
+
 ### 4. Validation & Error Matrix
 
 | Condition | Result |
@@ -111,10 +161,10 @@
 
 - `test/stats-event.test.ts`: `parseUsage` for both `prompt_tokens/completion_tokens` and `input_tokens/output_tokens`, cached/reasoning details, missing/illegal values -> `null`; `parseRateLimitHeaders` for requests vs tokens variants and `1s`/`6m0s`/`100ms` resets; `classifyRoute` for all five kinds.
 - `test/stats-store.test.ts`: append/read round-trip, per-day splitting, corrupted line skipped, retention deletes only out-of-window files, write failures return `false`.
-- `test/stats-aggregate.test.ts`: cancelled (`client_aborted`) requests stay out of `avgDurationMs` / `p50` / `p95` while still counting toward `requests` / `aborted`; non-streaming requests produce no `outputTokensPerSecond` sample and an all-non-stream aggregate reports `null`; error rate, bucketed p50/p95 (assert the bucket edge, e.g. a lone 42 ms sample reports 50), token sums, `outputTokensPerSecond`, `unrouted` separation (routing failures never appear in `targets` / `days` / `hours`, and `overall.requests + unrouted.requests` equals the total), and that `snapshot` drops days outside the retention window (accumulator does not grow unbounded).
+- `test/stats-aggregate.test.ts`: the `AggregateMetrics` field set equals the `aggregate-metrics-matrix` rows in this document (adding a metric without a matrix row and an outlet fails the build); cancelled (`client_aborted`) requests stay out of `avgDurationMs` / `p50` / `p95` while still counting toward `requests` / `aborted`; non-streaming requests produce no `outputTokensPerSecond` sample and an all-non-stream aggregate reports `null`; error rate, bucketed p50/p95 (assert the bucket edge, e.g. a lone 42 ms sample reports 50), token sums, `outputTokensPerSecond`, `unrouted` separation (routing failures never appear in `targets` / `days` / `hours`, and `overall.requests + unrouted.requests` equals the total), and that `snapshot` drops days outside the retention window (accumulator does not grow unbounded).
 - `test/routing-stats.test.ts`: `warp`, `explicit`, `overridden`, `unrouted`, and `/v1/models` producing no event; `unrouted` excluded from every upstream view (no `unrouted` target exists at all) while `Aggregate.unrouted` still counts it, plus the two invariants above.
 - `test/proxy.test.ts`: SSE stays incremental — read with `res.body.getReader()` and assert the second chunk arrives **after** the first; `await res.text()` is not acceptable. Plus TTFT on first chunk, usage from the final chunk, and the no-usage fallback.
-- `test/tui.test.ts`: the filter row no longer offers a 「路由失败」 option (it would always be empty) but still prints `未发出 N` (the label is 「未发出」, not 「未路由」, because the bucket also holds local errors such as an unreadable body or a missing API key); `↑`/`↓` stays in range.
+- `test/tui.test.ts`: the filter row no longer offers a 「路由失败」 option (it would always be empty) but still prints `未发出 N` (the label is 「未发出」, not 「未路由」, because the bucket also holds local errors such as an unreadable body or a missing API key); `↑`/`↓` moves the selected target row and stays in range (`f` cycles the filter, `h` toggles the sparkline granularity); the selected-target detail panel prints every `AggregateMetrics` field (`p50` / `p95 TTFT` / stream / non-stream / total tokens included) and follows the selected row; the hour sparkline consumes `aggregate.hours` and `restoreStatsView` keeps `statsFilter` / `statsMetric` / `statsRange` / `statsSelected` across a refresh, re-locating the selected target by `provider/model/endpoint/routeKind` instead of by index.
 - `test/server.test.ts`: status snapshot carries `stats`; client abort mid-stream records `ok: false` / `status: null` / `termination: "client_aborted"` and none of it lands in `errors`; a disconnect after a terminal event records `ok: true` / `termination: "completed"`; an upstream stream error records `termination: "upstream_error"` and counts as an error; a Responses `response.failed` terminal records `ok: false`. Tests that assert on the persisted aggregate must reset `<CONFIG_DIR>/stats` first, because tests in one file share `CONFIG_DIR` and the JSONL record accumulates.
 
 ### 7. Wrong vs Correct

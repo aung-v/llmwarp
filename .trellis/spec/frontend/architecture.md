@@ -12,7 +12,7 @@ src/searchCheckbox.ts   # Custom searchable checkbox prompt
 src/config.ts           # Source of truth for providers and active selection
 src/daemon.ts           # Daemon process state and admin API client
 src/tui/index.ts        # Persistent TUI process: key handling, refresh loop, config write then daemon sync
-src/tui/model.ts        # TUI view state (catalog, selection, confirm intent, stats filters) and status parsing
+src/tui/model.ts        # TUI view state (catalog, selection, confirm intent, stats filter/metric/range/selection) and status parsing
 src/tui/render.ts       # Pure panel/footer rendering for the TUI
 ```
 
@@ -33,7 +33,7 @@ If a persistent TUI dashboard is added, keep it as a terminal frontend process t
 ## TUI Pages, Focus, and Confirmations
 
 - `TuiState.page` (`"models" | "routing" | "providers" | "stats"`) selects the left-hand list; `TuiState.focus` (`"nav" | "list" | "daemon"`) selects the active region. The daemon panel owns the restart/start button, so a restart can only start from `focus === "daemon"`.
-- The `统计` page is read-only: it renders the historical aggregate from `GET /_llmwarp/status` (`stats.aggregate`). It never writes config and never owns provider/daemon state. Missing or disabled stats render an empty-state message instead of an error.
+- The `统计` page is read-only: it renders the historical aggregate from `GET /_llmwarp/status` (`stats.aggregate`) as a sparkline + `overall` summary, a per-upstream-target table, and a detail panel that must expose every `AggregateMetrics` field for the selected row. It never writes config and never owns provider/daemon state. Missing or disabled stats render an empty-state message instead of an error.
 - `TuiState.confirming` is an intent enum (`null | "switch" | "routing" | "restart" | "remove-provider"`), never a boolean. Render and key dispatch branch on the intent so two confirmations can never consume each other's `Enter`.
 - Adding a new TUI write action means adding an intent plus its own `begin*`/`confirm*` pair; do not overload an existing intent.
 - The TUI never owns the daemon lifecycle: the restart action calls the existing `stopDaemon()` / `startDaemon()` from `src/daemon.ts` after explicit confirmation, and `src/tui/model.ts` stays pure view state.

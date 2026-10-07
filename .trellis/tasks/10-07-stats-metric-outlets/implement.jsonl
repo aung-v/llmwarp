@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/usage-stats.md", "reason": "被补充的指标出口契约（矩阵）"}
+{"file": ".trellis/spec/frontend/interaction-guidelines.md", "reason": "TUI 焦点/键位约定"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "视图状态与刷新保留规则"}

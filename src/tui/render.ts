@@ -2,11 +2,15 @@ import type { TuiPage, TuiState } from "./model.js";
 import {
   ROUTING_OPTIONS,
   STATS_FILTERS,
+  filteredStatsTargets,
   selectedEntry,
   selectedProvider,
   selectedRouting,
   selectedStatsFilter,
+  selectedStatsIndex,
 } from "./model.js";
+import type { TargetAggregate } from "../stats/aggregate.js";
+import type { RouteKind } from "../stats/event.js";
 import pc from "picocolors";
 
 const ANSI_ESCAPE = /\u001B\[[0-?]*[ -/]*[@-~]|\u001B\][^\u0007]*(?:\u0007|\u001B\\)/g;
@@ -347,7 +351,44 @@ function percent(rate: number): string {
   return `${value >= 10 || value === 0 ? value.toFixed(0) : value.toFixed(1)}%`;
 }
 
-/** 统计页主体：按天火花线 + 按 provider/model 的切片表；数据来自 status.stats。 */
+/** routeKind 的中文标签，与统计页过滤器保持一致。 */
+const ROUTE_KIND_LABELS: Record<RouteKind, string> = {
+  warp: "warp 别名",
+  explicit: "按客户端",
+  fallback: "未指定模型",
+  overridden: "被开关覆盖",
+  unrouted: "未发出",
+};
+
+/** 表格里的短标签：同一个上游模型会按 routeKind 拆成多行，必须能区分。 */
+const ROUTE_KIND_SHORT: Record<RouteKind, string> = {
+  warp: "warp",
+  explicit: "客户端",
+  fallback: "回退",
+  overridden: "覆盖",
+  unrouted: "未发出",
+};
+
+/** 选中目标的完整指标详情：每个 AggregateMetrics 字段都必须在这里出现。 */
+function statsDetailRows(target: TargetAggregate | null): string[] {
+  if (!target) {
+    return ["", pc.bold("选中详情"), pc.dim("  当前过滤条件下没有目标")];
+  }
+  const hasTtft = target.ttftSamples > 0;
+  return [
+    "",
+    pc.bold(
+      `选中详情  ${sanitize(target.provider ?? "未发出")}/${sanitize(target.model ?? "—")} · ${sanitize(shortEndpoint(target.endpoint))} · ${ROUTE_KIND_LABELS[target.routeKind]}`,
+    ),
+    `  延迟   平均 ${target.avgDurationMs}ms · p50 ${target.p50DurationMs}ms · p95 ${target.p95DurationMs}ms`,
+    `         TTFT 平均 ${hasTtft ? `${target.avgTtftMs}ms` : "—"} · TTFT p95 ${hasTtft ? `${target.p95TtftMs}ms` : "—"} · 样本 ${target.ttftSamples}`,
+    `  吞吐   ${target.outputTokensPerSecond ?? "—"} tok/s · 流式 ${target.streamRequests} · 非流式 ${target.nonStreamRequests}`,
+    `  token  输入 ${target.inputTokens} · 输出 ${target.outputTokens} · 总 ${target.totalTokens} · 缓存 ${target.cachedTokens} · 推理 ${target.reasoningTokens}`,
+    `  可靠性 请求 ${target.requests} · 错误 ${target.errors}（${percent(target.errorRate)}）· 中断 ${target.aborted} · 截断 ${target.truncations} · 拦截 ${target.contentFiltered}`,
+  ];
+}
+
+/** 统计页主体：火花线（天/小时）+ 按上游目标的切片表 + 选中目标详情；数据来自 status.stats。 */
 function statsRows(state: TuiState, height: number, width: number): string[] {
   const snapshot = state.status?.stats;
   if (!state.status) {
@@ -374,11 +415,17 @@ function statsRows(state: TuiState, height: number, width: number): string[] {
   const filter = selectedStatsFilter(state);
   const overall = aggregate.overall;
   const days = aggregate.days;
-  const values = days.map((day) => (metric === "tokens" ? day.totalTokens : day.requests));
+  // hours 是稀疏的（只含真正有请求的小时），所以按「最近 24 个活跃小时」标注，不假造空桶。
+  const series = state.statsRange === "hour" ? aggregate.hours.slice(-24) : days;
+  const values = series.map((point) => (metric === "tokens" ? point.totalTokens : point.requests));
   const spark = sparkline(values);
+  const rangeLabel =
+    state.statsRange === "hour"
+      ? `火花线 按小时（最近 ${series.length} 个活跃小时）`
+      : "火花线 按天";
 
   rows.push(
-    pc.dim(`区间  最近 ${snapshot.retentionDays} 天 · ${days.length} 天有数据`),
+    pc.dim(`区间  最近 ${snapshot.retentionDays} 天 · ${days.length} 天有数据 · ${rangeLabel}`),
     `${metric === "tokens" ? "Token" : "请求"} ${spark || "—"}`,
     `汇总  请求 ${overall.requests} · 错误 ${overall.errors}（${percent(overall.errorRate)}）· 平均 ${overall.avgDurationMs}ms · p95 ${overall.p95DurationMs}ms`,
     pc.dim(
@@ -389,52 +436,47 @@ function statsRows(state: TuiState, height: number, width: number): string[] {
     ),
   );
 
-  const filtered =
-    filter.id === "all"
-      ? aggregate.targets
-      : aggregate.targets.filter((target) => target.routeKind === filter.id);
+  const filtered = filteredStatsTargets(aggregate, filter.id);
+  const selectedIndex = selectedStatsIndex(state, filtered.length);
   const filteredRequests = filtered.reduce((sum, target) => sum + target.requests, 0);
   const filteredErrors = filtered.reduce((sum, target) => sum + target.errors, 0);
+  const detail = statsDetailRows(selectedIndex >= 0 ? (filtered[selectedIndex] ?? null) : null);
 
-  rows.push("");
+  // 空间不够时优先保住详情：扣除「过滤两行 + 表头/分隔线」与详情后，余下的才是目标行。
+  const tableSpace = Math.max(height - rows.length - 2 - 2 - detail.length, 0);
+  const shown = Math.min(filtered.length, tableSpace);
+
   rows.push(
     `过滤   ${STATS_FILTERS.map((option) =>
       option.id === filter.id ? pc.bgBlue(pc.white(` ${option.label} `)) : pc.dim(option.label),
     ).join(" ")}`,
-  );
-  rows.push(
     pc.dim(
-      `       ↑↓ 切换过滤  Enter 切换指标   命中 ${filteredRequests} 请求 · 错误 ${filteredErrors} · 未发出 ${aggregate.unrouted.requests}`,
+      `      命中 ${filteredRequests} 请求 · 错误 ${filteredErrors} · 未发出 ${aggregate.unrouted.requests}${filtered.length > shown ? ` · 表格显示 ${shown}/${filtered.length} 行` : ""}`,
     ),
   );
-  rows.push("");
 
-  // 7 列（供应商/模型 · 端点 · 请求 · 错误率 · 平均 · TTFT · p95）：固定宽度 47 + 6 个空格。
-  const labelWidth = Math.max(width - 54, 8);
+  // 8 列（供应商/模型 · 端点 · 路由 · 请求 · 错误率 · 平均 · TTFT · p95）：固定宽度 54 + 7 个空格。
+  const labelWidth = Math.max(width - 61, 8);
   const endpointWidth = 16;
-  rows.push(
-    pc.bold(
-      `${pad("供应商 / 模型", labelWidth)} ${pad("端点", endpointWidth)} ${rightAlign("请求", 5)} ${rightAlign("错误率", 7)} ${rightAlign("平均", 6)} ${rightAlign("TTFT", 6)} ${rightAlign("p95", 7)}`,
-    ),
-  );
-  rows.push(pc.dim("─".repeat(Math.max(width, 10))));
-
-  const available = height - rows.length;
+  const routeWidth = 7;
   if (filtered.length === 0) {
-    rows.push(pc.dim("该过滤条件下暂无请求"));
-  } else {
-    for (const target of filtered.slice(0, Math.max(available, 0))) {
+    rows.push("", pc.dim("该过滤条件下暂无请求"));
+  } else if (tableSpace >= 1) {
+    rows.push(
+      pc.bold(
+        `${pad("供应商 / 模型", labelWidth)} ${pad("端点", endpointWidth)} ${pad("路由", routeWidth)} ${rightAlign("请求", 5)} ${rightAlign("错误率", 7)} ${rightAlign("平均", 6)} ${rightAlign("TTFT", 6)} ${rightAlign("p95", 7)}`,
+      ),
+      pc.dim("─".repeat(Math.max(width, 10))),
+    );
+    filtered.slice(0, shown).forEach((target, index) => {
       // 旧载荷可能仍带 provider 为空的目标（新代码不再产生）；标签与过滤行统一用「未发出」。
       const label = `${sanitize(target.provider ?? "未发出")}/${sanitize(target.model ?? "—")}`;
       const ttft = target.ttftSamples > 0 ? `${target.avgTtftMs}ms` : "—";
-      rows.push(
-        `${pad(label, labelWidth)} ${pad(shortEndpoint(sanitize(target.endpoint)), endpointWidth)} ${rightAlign(String(target.requests), 5)} ${rightAlign(percent(target.errorRate), 7)} ${rightAlign(`${target.avgDurationMs}ms`, 6)} ${rightAlign(ttft, 6)} ${rightAlign(`${target.p95DurationMs}ms`, 7)}`,
-      );
-    }
-    if (filtered.length > Math.max(available, 0)) {
-      rows.push(pc.dim(`… 其余 ${filtered.length - Math.max(available, 0)} 条按 ↑↓ 过滤后查看`));
-    }
+      const line = `${pad(label, labelWidth)} ${pad(shortEndpoint(sanitize(target.endpoint)), endpointWidth)} ${pad(ROUTE_KIND_SHORT[target.routeKind], routeWidth)} ${rightAlign(String(target.requests), 5)} ${rightAlign(percent(target.errorRate), 7)} ${rightAlign(`${target.avgDurationMs}ms`, 6)} ${rightAlign(ttft, 6)} ${rightAlign(`${target.p95DurationMs}ms`, 7)}`;
+      rows.push(index === selectedIndex ? pc.bgBlue(pc.white(line)) : line);
+    });
   }
+  rows.push(...detail);
   return rows;
 }
 
@@ -578,7 +620,7 @@ export function renderTui(
   const keyHint = state.switching
     ? "处理中… 请稍候（Ctrl-C 可退出）"
     : state.page === "stats"
-      ? "↑↓ 切换过滤  Enter 切换指标  ←→ 换区/换页  r 刷新  q 退出"
+      ? "↑↓ 选择目标  f 过滤  Enter 指标  h 天/小时  ←→ 换页  r 刷新  q 退出"
       : "↑↓ 选中  ←→ 换区/换页  Enter 确认  Esc 取消  r 刷新  q 退出";
   const message = state.message && !state.switching && !state.confirming ? state.message : null;
   const footerText = message

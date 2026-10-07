@@ -12,15 +12,20 @@ import {
   buildCatalog,
   cancelConfirm,
   createTuiState,
+  cycleStatsFilter,
   finishSuspended,
   focusNext,
   focusPrev,
   moveSelection,
   parseStatusSnapshot,
   pushEvent,
+  restoreStatsView,
   selectedProvider,
   selectedStatsFilter,
+  selectedStatsIndex,
+  selectedStatsTarget,
   STATS_FILTERS,
+  toggleStatsRange,
   toggleStatsMetric,
   TUI_PAGES,
   type StatusSnapshot,
@@ -800,20 +805,171 @@ test("统计页无 TTFT 样本时汇总行显示 — 而不是 0ms", () => {
   assert.doesNotMatch(output, /TTFT 平均 0ms/);
 });
 
-test("统计页 ↑↓ 切换 routeKind 过滤且不越界", () => {
+test("统计页 ↑↓ 在目标表格里移动选中行且不越界", () => {
+  let state = openPage(createTuiState(buildCatalog(config), statsStatus), "stats");
+  assert.equal(state.statsSelected, 0);
+  assert.equal(selectedStatsTarget(state)?.routeKind, "warp");
+  assert.equal(selectedStatsIndex(state, 2), 0);
+
+  state = moveSelection(state, 1);
+  assert.equal(state.statsSelected, 1);
+  assert.equal(selectedStatsTarget(state)?.routeKind, "overridden");
+
+  state = moveSelection(state, 10);
+  assert.equal(state.statsSelected, 1, "越界收敛到末行");
+  state = moveSelection(state, -10);
+  assert.equal(state.statsSelected, 0);
+  assert.equal(selectedStatsIndex(state, 0), -1);
+  assert.equal(selectedStatsTarget({ ...state, status: null }), null);
+});
+
+test("统计页 f 循环 routeKind 过滤且不越界", () => {
   let state = openPage(createTuiState(buildCatalog(config), statsStatus), "stats");
   assert.equal(state.statsFilter, 0);
   assert.equal(selectedStatsFilter(state).id, "all");
   // 路由失败不再是过滤项，键位只在剩余选项间循环。
   assert.equal(STATS_FILTERS.some((option) => option.id === "unrouted"), false);
 
-  state = moveSelection(state, 1);
+  state = cycleStatsFilter(state, 1);
   assert.equal(selectedStatsFilter(state).id, "warp");
-  state = moveSelection(state, 10);
+  state = cycleStatsFilter(state, 10);
   assert.equal(state.statsFilter, STATS_FILTERS.length - 1);
   assert.equal(selectedStatsFilter(state).id, "overridden");
-  state = moveSelection(state, -10);
+  state = cycleStatsFilter(state, -10);
   assert.equal(state.statsFilter, 0);
+
+  // 过滤变化后选中行回到首行，避免指向被过滤掉的目标。
+  state = { ...state, statsSelected: 1 };
+  state = cycleStatsFilter(state, 1);
+  assert.equal(state.statsSelected, 0);
+
+  const modelsState = createTuiState(buildCatalog(config), statsStatus);
+  assert.equal(cycleStatsFilter(modelsState, 1), modelsState);
+});
+
+test("统计页 h 在按天 / 按小时粒度间切换，小时火花线消费 aggregate.hours", () => {
+  const accumulator = new AggregateAccumulator();
+  const sample = sampleStatsEvents();
+  // 同一天三个小时各一条：hours 有 3 桶，days 只有 1 天，可区分火花线数据源。
+  const base = new Date(2026, 8, 27, 0, 0, 0).getTime();
+  for (const hour of [9, 11, 15]) {
+    accumulator.add({ ...sample[1], ts: base + hour * 3_600_000 });
+  }
+  const aggregate = accumulator.snapshot(new Date(2026, 8, 27, 20, 0, 0).getTime(), 30);
+  assert.equal(aggregate.days.length, 1);
+  assert.equal(aggregate.hours.length, 3);
+
+  let state = openPage(
+    createTuiState(buildCatalog(config), {
+      ...status,
+      stats: { enabled: true, retentionDays: 30, aggregate },
+    }),
+    "stats",
+  );
+  assert.equal(state.statsRange, "day");
+  const dayOutput = renderTui(state, { height: 34, width: 100 });
+  assert.match(dayOutput, /火花线 按天/);
+  assert.equal(dayOutput.match(/Token ([▁-█]+)/)?.[1]?.length, 1);
+
+  state = toggleStatsRange(state);
+  assert.equal(state.statsRange, "hour");
+  const hourOutput = renderTui(state, { height: 34, width: 100 });
+  assert.match(hourOutput, /火花线 按小时（最近 3 个活跃小时）/);
+  assert.equal(hourOutput.match(/Token ([▁-█]+)/)?.[1]?.length, 3);
+
+  const modelsState = createTuiState(buildCatalog(config), statsStatus);
+  assert.equal(toggleStatsRange(modelsState), modelsState);
+});
+
+test("统计页选中目标详情覆盖延迟 / 吞吐 / token / 可靠性全部指标", () => {
+  const state = openPage(createTuiState(buildCatalog(config), statsStatus), "stats");
+  const output = renderTui(state, { height: 34, width: 100 });
+
+  assert.match(output, /选中详情\s+ark\/glm-5\.3-flash · chat\/completions · warp 别名/);
+  assert.match(output, /平均 560ms · p50 150ms · p95 1000ms/);
+  assert.match(output, /TTFT 平均 200ms · TTFT p95 200ms · 样本 1/);
+  assert.match(output, /吞吐\s+25 tok\/s · 流式 1 · 非流式 1/);
+  assert.match(output, /token\s+输入 110 · 输出 220 · 总 330 · 缓存 50 · 推理 5/);
+  assert.match(output, /可靠性 请求 2 · 错误 0（0%）· 中断 0 · 截断 0 · 拦截 0/);
+
+  // 选中行变化后详情跟随（第二个目标是「被开关覆盖」）。
+  const movedOutput = renderTui(moveSelection(state, 1), { height: 34, width: 100 });
+  assert.match(movedOutput, /选中详情\s+ark\/glm-5\.3-flash · chat\/completions · 被开关覆盖/);
+  assert.match(movedOutput, /平均 300ms · p50 300ms · p95 300ms/);
+  assert.match(movedOutput, /TTFT 平均 — · TTFT p95 — · 样本 0/);
+  assert.match(movedOutput, /吞吐\s+— tok\/s · 流式 0 · 非流式 1/);
+  assert.match(movedOutput, /可靠性 请求 1 · 错误 1（100%）· 中断 0 · 截断 0 · 拦截 0/);
+});
+
+test("自动刷新恢复统计页视图状态，并按身份重定位选中目标", () => {
+  const before = {
+    ...openPage(createTuiState(buildCatalog(config), statsStatus), "stats"),
+    statsRange: "hour" as const,
+    statsSelected: 0,
+  };
+  assert.equal(selectedStatsTarget(before)?.routeKind, "warp");
+
+  // 刷新后目标顺序反转（请求量排序随流量漂移）：下标要跟着身份走。
+  const reordered: StatusSnapshot = {
+    ...statsStatus,
+    stats: {
+      enabled: true,
+      retentionDays: 30,
+      aggregate: { ...statsAggregate, targets: [...statsAggregate.targets].reverse() },
+    },
+  };
+  const restored = restoreStatsView(before, createTuiState(buildCatalog(config), reordered));
+  assert.equal(restored.statsRange, "hour");
+  assert.equal(restored.statsMetric, before.statsMetric);
+  assert.equal(restored.statsSelected, 1, "下标随目标身份移动");
+  assert.equal(selectedStatsTarget(restored)?.routeKind, "warp");
+
+  // 目标消失时回到首行，不越界。
+  const empty = restoreStatsView(
+    before,
+    createTuiState(buildCatalog(config), {
+      ...statsStatus,
+      stats: { enabled: true, retentionDays: 30, aggregate: { ...statsAggregate, targets: [] } },
+    }),
+  );
+  assert.equal(empty.statsSelected, 0);
+  assert.equal(selectedStatsTarget(empty), null);
+});
+
+test("统计页目标表格用路由列区分同一上游模型的多个 target", () => {
+  const state = openPage(createTuiState(buildCatalog(config), statsStatus), "stats");
+  const lines = renderTui(state, { height: 34, width: 100 }).split("\n");
+
+  assert.ok(
+    lines.some((line) => /路由\s+请求/.test(line)),
+    "表头应包含路由列",
+  );
+  const warpRow = lines.find((line) => line.includes("ark/glm-5.3-flash") && line.includes("warp"));
+  const overriddenRow = lines.find((line) => line.includes("ark/glm-5.3-flash") && line.includes("覆盖"));
+  assert.ok(warpRow, "缺少 warp 目标行");
+  assert.ok(overriddenRow, "缺少被开关覆盖目标行");
+  assert.notEqual(warpRow, overriddenRow);
+  assert.notEqual(
+    renderTui(moveSelection(state, 1), { height: 34, width: 100 }),
+    renderTui(state, { height: 34, width: 100 }),
+  );
+});
+
+test("统计页窄窗口下优先保留选中目标详情并报告隐藏行数", () => {
+  const state = openPage(createTuiState(buildCatalog(config), statsStatus), "stats");
+  const output = renderTui(state, { height: 24, width: 72 });
+
+  for (const line of output.split("\n").filter((row) => /^[╭│╰]/.test(row))) {
+    assert.equal(visibleWidth(line), 72);
+  }
+  // 表格让位，详情五行一个都不少。
+  assert.match(output, /选中详情/);
+  assert.match(output, /平均 560ms · p50 150ms · p95 1000ms/);
+  assert.match(output, /TTFT 平均 200ms · TTFT p95 200ms · 样本 1/);
+  assert.match(output, /吞吐\s+25 tok\/s · 流式 1 · 非流式 1/);
+  assert.match(output, /推理 5/);
+  assert.match(output, /可靠性 请求 2 · 错误 0（0%）· 中断 0 · 截断 0 · 拦截 0/);
+  assert.match(output, /表格显示 \d\/2 行/);
 });
 
 test("统计页 Enter 在 token / 请求数之间切换", () => {

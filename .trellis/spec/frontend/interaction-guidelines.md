@@ -33,20 +33,23 @@ info(dim(`客户端接入地址 ${endpointUrl(config)}`));
 
 ## TUI Keys
 
-Current persistent-TUI key map, kept in `src/tui/index.ts` and surfaced in the footer. There are no single-letter action shortcuts; every action is a navigation-plus-`Enter` flow.
+Current persistent-TUI key map, kept in `src/tui/index.ts` and surfaced in the footer. Every **action** is a navigation-plus-`Enter` flow; the only single-letter keys are `r` / `q` plus the two read-only `统计` view toggles (`f` / `h`), which have no `Enter` target of their own.
 
 | Key | Action |
 |---|---|
 | `←` / `→` | Move focus between the left list and the daemon panel; while focus is on the top nav bar, cycle between the `模型` / `路由` / `供应商` / `统计` pages |
-| `↑` / `↓` | Move the selection within the current page's list (from the nav bar, descend into the list) |
+| `↑` / `↓` | Move the selection within the current page's list (from the nav bar, descend into the list); on the `统计` page it moves the highlighted upstream target row |
 | `Enter` | Trigger the focused item: confirm a model/routing change, open the restart confirmation while focused on the daemon panel, start the provider add/edit/remove flow on the `供应商` page, or toggle token/request units on the `统计` page |
+| `f` | `统计` page only: cycle the `routeKind` filter; the selected target row resets to the first row |
+| `h` | `统计` page only: toggle the sparkline granularity between day and hour |
 | `Esc` | Cancel a pending confirmation; outside a confirmation, move focus back one level (daemon → list, list → nav) |
 | `r` | Refresh state and catalog |
 | `q`, `Ctrl-C` | Quit the TUI (the daemon keeps running) |
 
 - Navigation is a two-level structure: a top nav bar (`模型` / `路由` / `供应商` / `统计`), the current page's list, and the right-hand daemon panel. The selected item and the focused region must both be visibly distinguishable.
-- The `统计` page is read-only: `↑`/`↓` cycles the `routeKind` filter (including `被开关覆盖` / `路由失败`); it has no confirmation and no write action.
+- The `统计` page is read-only: `↑`/`↓` picks the upstream target row, `f` cycles the `routeKind` filter (there is no `路由失败` / `unrouted` filter option, it would only ever be empty), `h` switches the sparkline between day and the last 24 active hours, and `Enter` toggles the token/request unit. It has no confirmation and no write action.
 - The `供应商` page is the provider-management entry: the list rows open the existing `edit` flow, and the `[ + 添加供应商 ]` / `[ - 删除 … ]` rows trigger `add` / `remove`. There is no provider business logic in the TUI. Triggering one suspends the TUI (leave the alternate screen, disable raw mode), runs the existing CLI flow unchanged (`inquirer` / `$EDITOR` work as usual), waits for a key, then re-enters the alternate screen and refreshes. Failures/aborts restore the TUI and land in the bottom-right feedback area.
+- The `统计` page shows three layers: a sparkline + summary for `overall`, a per-upstream-target table (one row per `provider` / `model` / `endpoint` / `routeKind`), and a detail panel for the selected row that must render **every** `AggregateMetrics` field. When the panel is too short, shrink the table (never the detail panel) and say how many rows are hidden.
 - Action results live in the bottom-right `反馈 / 请求活动` panel, together with request metrics. Every action (switch model/routing, start/restart daemon) must append a `✓`/`✗` event with the full reason on failure; the event survives auto-refresh instead of being written to a footer line that the next refresh erases.
 - Confirmations are two-step and intent-scoped: the prompt must restate the consequence (`切换为「统一用当前模型」？客户端请求的模型将被忽略。`), not just the action. The restart confirmation must state that in-flight `/v1` requests are interrupted.
 - There is no key that restarts the daemon directly; the daemon panel button must be focused and confirmed.

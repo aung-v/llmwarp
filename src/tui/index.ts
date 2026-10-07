@@ -30,6 +30,7 @@ import {
   buildCatalog,
   cancelConfirm,
   createTuiState,
+  cycleStatsFilter,
   focusNext,
   focusPrev,
   finishSuspended,
@@ -37,9 +38,11 @@ import {
   moveSelection,
   parseStatusSnapshot,
   pushEvent,
+  restoreStatsView,
   selectedEntry,
   selectedProvider,
   selectedRouting,
+  toggleStatsRange,
   toggleStatsMetric,
   type CatalogItem,
   type ProviderSummary,
@@ -198,6 +201,8 @@ export async function startTui(): Promise<void> {
       debugLog("refresh", "daemonRunning", running ? { pid: running.pid, port: running.port } : { running: false });
       const status = running ? parseStatusSnapshot(await adminRequest("GET", "status")) : null;
       const { entries, useClientModel, providers } = await readCatalog(status);
+      // 刷新会整体重建 state；纯视图状态从旧快照恢复。
+      const previousView = state;
       const previousEntry = state.entries[state.selected];
       const previousSelected = previousEntry
         ? entries.findIndex(
@@ -210,8 +215,6 @@ export async function startTui(): Promise<void> {
       const previousRoutingSelected = state.routingSelected;
       const previousProviderCursor = state.providerCursor;
       const previousProviderSelected = state.providerSelected;
-      const previousStatsFilter = state.statsFilter;
-      const previousStatsMetric = state.statsMetric;
       const previousConfirming = state.confirming;
       const previousEvents = state.events;
       state = createTuiState(entries, status, useClientModel, providers);
@@ -225,9 +228,8 @@ export async function startTui(): Promise<void> {
       // 供应商页同理：光标和删除目标要保住，且供应商减少后要收敛到有效范围。
       state.providerCursor = Math.min(previousProviderCursor, Math.max(providers.length + 1, 0));
       state.providerSelected = Math.min(previousProviderSelected, Math.max(providers.length - 1, 0));
-      // 统计页的过滤与指标选择是纯视图状态，自动刷新不能重置。
-      state.statsFilter = previousStatsFilter;
-      state.statsMetric = previousStatsMetric;
+      // 统计页的过滤 / 指标 / 粒度 / 选中目标都是纯视图状态，自动刷新不能重置。
+      state = restoreStatsView(previousView, state);
       if (previousConfirming === "switch") {
         state.confirming = state.entries[state.selected]?.selectable ? "switch" : null;
       } else if (previousConfirming === "routing" && previousPage === "routing") {
@@ -437,6 +439,19 @@ export async function startTui(): Promise<void> {
 
     if (key.name === "r") {
       void refresh("已刷新");
+      return;
+    }
+
+    // 统计页局部视图键：f 循环过滤，h 切换火花线粒度；都是只读操作，不涉及写。
+    if (!key.ctrl && state.page === "stats" && key.name === "f") {
+      state = cycleStatsFilter(state, 1);
+      draw();
+      return;
+    }
+
+    if (!key.ctrl && state.page === "stats" && key.name === "h") {
+      state = toggleStatsRange(state);
+      draw();
       return;
     }
 

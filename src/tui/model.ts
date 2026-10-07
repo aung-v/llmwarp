@@ -83,6 +83,9 @@ export const STATS_FILTERS: StatsFilterOption[] = [
 /** 火花线指标：token 总量 / 请求数。 */
 export type StatsMetric = "tokens" | "requests";
 
+/** 火花线粒度：按天（days）或按小时（hours）。 */
+export type StatsRange = "day" | "hour";
+
 /** 键盘焦点区域：导航栏 / 当前页列表 / 守护进程信息栏（含重启按钮）。 */
 export type TuiFocus = "nav" | "list" | "daemon";
 
@@ -130,6 +133,9 @@ export interface TuiState {
   useClientModel: boolean;
   statsFilter: number;
   statsMetric: StatsMetric;
+  statsRange: StatsRange;
+  /** 选中的目标行（过滤后列表里的下标）；越界时按末行处理。 */
+  statsSelected: number;
 }
 
 export function buildCatalog(config: Config, status?: StatusSnapshot | null): CatalogItem[] {
@@ -206,6 +212,8 @@ export function createTuiState(
     useClientModel,
     statsFilter: 0,
     statsMetric: "tokens",
+    statsRange: "day",
+    statsSelected: 0,
   };
 }
 
@@ -260,8 +268,10 @@ export function moveSelection(state: TuiState, delta: number): TuiState {
   }
 
   if (state.page === "stats") {
-    const next = Math.min(Math.max(state.statsFilter + delta, 0), STATS_FILTERS.length - 1);
-    return { ...state, statsFilter: next };
+    // ↑↓ 在目标表格里移动选中行（与其它页「↑↓ 选中」保持一致）；过滤走 `f`。
+    const count = filteredStatsTargets(currentAggregate(state), selectedStatsFilter(state).id).length;
+    const next = Math.min(Math.max(state.statsSelected + delta, 0), Math.max(count - 1, 0));
+    return { ...state, statsSelected: next };
   }
 
   const next = Math.min(Math.max(state.selected + delta, 0), Math.max(state.entries.length - 1, 0));
@@ -280,6 +290,84 @@ export function selectedStatsFilter(state: TuiState): StatsFilterOption {
 export function toggleStatsMetric(state: TuiState): TuiState {
   if (navigationLocked(state) || state.page !== "stats") return state;
   return { ...state, statsMetric: state.statsMetric === "tokens" ? "requests" : "tokens" };
+}
+
+/** 统计页 `h`：在按天 / 按小时两种火花线粒度间切换。 */
+export function toggleStatsRange(state: TuiState): TuiState {
+  if (navigationLocked(state) || state.page !== "stats") return state;
+  return { ...state, statsRange: state.statsRange === "day" ? "hour" : "day" };
+}
+
+/** 统计页 `f`：循环 routeKind 过滤；过滤变化后选中行回到首行。 */
+export function cycleStatsFilter(state: TuiState, delta: number): TuiState {
+  if (navigationLocked(state) || state.page !== "stats") return state;
+  const next = Math.min(Math.max(state.statsFilter + delta, 0), STATS_FILTERS.length - 1);
+  return { ...state, statsFilter: next, statsSelected: 0 };
+}
+
+function currentAggregate(state: TuiState): Aggregate | null {
+  return state.status?.stats?.aggregate ?? null;
+}
+
+/** 统计页当前过滤后的目标列表；渲染、选中、刷新重定位共用同一份顺序。 */
+export function filteredStatsTargets(
+  aggregate: Aggregate | null,
+  filter: StatsFilter,
+): TargetAggregate[] {
+  if (!aggregate) return [];
+  return filter === "all"
+    ? aggregate.targets
+    : aggregate.targets.filter((target) => target.routeKind === filter);
+}
+
+/** 选中行在过滤后列表里的有效下标；空列表返回 -1。 */
+export function selectedStatsIndex(state: TuiState, count: number): number {
+  if (count <= 0) return -1;
+  return Math.min(Math.max(state.statsSelected, 0), count - 1);
+}
+
+/** 统计页当前选中的上游目标；过滤后没有目标时为 null。 */
+export function selectedStatsTarget(state: TuiState): TargetAggregate | null {
+  const targets = filteredStatsTargets(currentAggregate(state), selectedStatsFilter(state).id);
+  const index = selectedStatsIndex(state, targets.length);
+  return index >= 0 ? (targets[index] ?? null) : null;
+}
+
+/** 目标身份：刷新后按这四个键重新定位选中行（排序会随流量变化）。 */
+export function sameStatsTarget(a: TargetAggregate, b: TargetAggregate): boolean {
+  return (
+    a.provider === b.provider &&
+    a.model === b.model &&
+    a.endpoint === b.endpoint &&
+    a.routeKind === b.routeKind
+  );
+}
+
+/** 刷新后把旧的选中目标映射回新列表；找不到就回到首行。 */
+export function locateStatsTarget(
+  aggregate: Aggregate | null,
+  filter: StatsFilter,
+  target: TargetAggregate | null,
+): number {
+  if (!target) return 0;
+  const index = filteredStatsTargets(aggregate, filter).findIndex((item) => sameStatsTarget(item, target));
+  return index >= 0 ? index : 0;
+}
+
+/**
+ * 刷新时恢复统计页的纯视图状态（过滤 / 指标 / 粒度 / 选中目标）。
+ * 目标行按请求量排序，下标会随流量漂移，所以选中行按身份重新定位而不是沿用下标。
+ */
+export function restoreStatsView(previous: TuiState, next: TuiState): TuiState {
+  const aggregate = next.status?.stats?.aggregate ?? null;
+  const target = selectedStatsTarget(previous);
+  return {
+    ...next,
+    statsFilter: previous.statsFilter,
+    statsMetric: previous.statsMetric,
+    statsRange: previous.statsRange,
+    statsSelected: locateStatsTarget(aggregate, selectedStatsFilter(previous).id, target),
+  };
 }
 
 export function selectedEntry(state: TuiState): CatalogItem | null {

@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { AggregateAccumulator, histogramPercentile } from "../src/stats/aggregate.js";
 import type { RequestEvent } from "../src/stats/event.js";
 
@@ -233,4 +234,27 @@ test("upstream_error 计入错误，错误率分母扣除 client_aborted", () =>
   assert.equal(result.overall.aborted, 1);
   // 1 / (3 - 1)
   assert.equal(result.overall.errorRate, 0.5);
+});
+
+test("AggregateMetrics 字段与 usage-stats 出口矩阵一一对应", () => {
+  const source = readFileSync(new URL("../src/stats/aggregate.ts", import.meta.url), "utf8");
+  const body = /export interface AggregateMetrics \{([\s\S]*?)\n\}/.exec(source)?.[1];
+  assert.ok(body, "找不到 AggregateMetrics 接口定义");
+  const codeFields = [...body.matchAll(/^ {2}(\w+)\??:/gm)].map((match) => match[1]);
+
+  const spec = readFileSync(
+    new URL("../.trellis/spec/backend/usage-stats.md", import.meta.url),
+    "utf8",
+  );
+  const matrix = /<!-- aggregate-metrics-matrix:start -->([\s\S]*?)<!-- aggregate-metrics-matrix:end -->/.exec(spec)?.[1];
+  assert.ok(matrix, "usage-stats.md 缺少「指标出口矩阵」区块");
+  const specFields = [...matrix.matchAll(/^\|\s*`(\w+)`/gm)].map((match) => match[1]);
+
+  assert.ok(codeFields.length > 0, "没解析到任何指标字段");
+  assert.equal(new Set(specFields).size, specFields.length, "矩阵里不能有重复字段");
+  assert.deepEqual(
+    [...specFields].sort(),
+    [...codeFields].sort(),
+    "新增/删除指标字段必须同步更新 usage-stats.md 的出口矩阵",
+  );
 });
