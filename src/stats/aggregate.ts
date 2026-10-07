@@ -73,6 +73,8 @@ interface Bucket {
   requests: number;
   errors: number;
   aborted: number;
+  /** 参与时延统计的请求数（排除 `client_aborted`）：`durationSum` / `duration` 直方图的分母。 */
+  timed: number;
   streamRequests: number;
   nonStreamRequests: number;
   durationSum: number;
@@ -111,6 +113,7 @@ function emptyBucket(): Bucket {
     requests: 0,
     errors: 0,
     aborted: 0,
+    timed: 0,
     streamRequests: 0,
     nonStreamRequests: 0,
     durationSum: 0,
@@ -144,13 +147,18 @@ function recordDuration(hist: Uint32Array, value: number): void {
 
 function addToBucket(bucket: Bucket, event: RequestEvent): void {
   bucket.requests += 1;
-  // 客户端自己取消不算服务失败：单独计 aborted，不计入 errors。
-  if (event.termination === "client_aborted") bucket.aborted += 1;
-  else if (!event.ok) bucket.errors += 1;
+  // 客户端自己取消不算服务失败：单独计 aborted，不计入 errors；其 durationMs 是被截断的
+  // 时长，也不进时延统计（否则会污染 avg / p50 / p95）。
+  const aborted = event.termination === "client_aborted";
+  if (aborted) bucket.aborted += 1;
+  else {
+    if (!event.ok) bucket.errors += 1;
+    bucket.timed += 1;
+    bucket.durationSum += event.durationMs;
+    recordDuration(bucket.duration, event.durationMs);
+  }
   if (event.stream) bucket.streamRequests += 1;
   else bucket.nonStreamRequests += 1;
-  bucket.durationSum += event.durationMs;
-  recordDuration(bucket.duration, event.durationMs);
   if (event.ttftMs !== null) {
     bucket.ttftSamples += 1;
     bucket.ttftSum += event.ttftMs;
@@ -166,8 +174,10 @@ function addToBucket(bucket: Bucket, event: RequestEvent): void {
   bucket.totalTokens += usage.total;
   bucket.cachedTokens += usage.cached ?? 0;
   bucket.reasoningTokens += usage.reasoning ?? 0;
-  if (usage.output > 0) {
-    const generation = event.ttftMs !== null ? Math.max(event.durationMs - event.ttftMs, 0) : event.durationMs;
+  // tok/s 只统计「解码期可测」的样本：流式且拿到过 TTFT，且未被客户端取消截断解码窗口。
+  // 非流式没有 TTFT，无法把预填充和解码分开，统一不参与（聚合结果为 null）。
+  if (usage.output > 0 && !aborted && event.ttftMs !== null) {
+    const generation = Math.max(event.durationMs - event.ttftMs, 0);
     if (generation > 0) {
       bucket.generationMs += generation;
       bucket.generatedTokens += usage.output;
@@ -179,6 +189,7 @@ function mergeInto(target: Bucket, source: Bucket): void {
   target.requests += source.requests;
   target.errors += source.errors;
   target.aborted += source.aborted;
+  target.timed += source.timed;
   target.streamRequests += source.streamRequests;
   target.nonStreamRequests += source.nonStreamRequests;
   target.durationSum += source.durationSum;
@@ -223,9 +234,9 @@ function metricsOf(bucket: Bucket): AggregateMetrics {
     errors: bucket.errors,
     aborted: bucket.aborted,
     errorRate: round(bucket.errors / failureBase, 4),
-    avgDurationMs: bucket.requests > 0 ? round(bucket.durationSum / bucket.requests) : 0,
-    p50DurationMs: histogramPercentile(bucket.duration, bucket.requests, 50),
-    p95DurationMs: histogramPercentile(bucket.duration, bucket.requests, 95),
+    avgDurationMs: bucket.timed > 0 ? round(bucket.durationSum / bucket.timed) : 0,
+    p50DurationMs: histogramPercentile(bucket.duration, bucket.timed, 50),
+    p95DurationMs: histogramPercentile(bucket.duration, bucket.timed, 95),
     avgTtftMs: bucket.ttftSamples > 0 ? round(bucket.ttftSum / bucket.ttftSamples) : 0,
     p95TtftMs: histogramPercentile(bucket.ttft, bucket.ttftSamples, 95),
     ttftSamples: bucket.ttftSamples,

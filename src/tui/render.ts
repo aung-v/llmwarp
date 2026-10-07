@@ -382,7 +382,7 @@ function statsRows(state: TuiState, height: number, width: number): string[] {
     `${metric === "tokens" ? "Token" : "请求"} ${spark || "—"}`,
     `汇总  请求 ${overall.requests} · 错误 ${overall.errors}（${percent(overall.errorRate)}）· 平均 ${overall.avgDurationMs}ms · p95 ${overall.p95DurationMs}ms`,
     pc.dim(
-      `      TTFT 平均 ${overall.avgTtftMs}ms · 输出 ${overall.outputTokensPerSecond ?? "—"} tok/s · 截断 ${overall.truncations} · 拦截 ${overall.contentFiltered} · 中断 ${overall.aborted}`,
+      `      TTFT 平均 ${overall.ttftSamples > 0 ? `${overall.avgTtftMs}ms` : "—"} · 输出 ${overall.outputTokensPerSecond ?? "—"} tok/s · 截断 ${overall.truncations} · 拦截 ${overall.contentFiltered} · 中断 ${overall.aborted}`,
     ),
     pc.dim(
       `      token 输入 ${overall.inputTokens} · 输出 ${overall.outputTokens} · 缓存 ${overall.cachedTokens} · 推理 ${overall.reasoningTokens}`,

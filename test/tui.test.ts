@@ -777,6 +777,28 @@ test("统计页显示中断数并按目标渲染 TTFT 列（无样本显示 —�
   }
 });
 
+test("统计页无 TTFT 样本时汇总行显示 — 而不是 0ms", () => {
+  const accumulator = new AggregateAccumulator();
+  const sample = sampleStatsEvents();
+  // 只喂非流式事件（ttftMs 恒为 null）→ overall.ttftSamples === 0。
+  for (const item of [sample[0], sample[2], sample[3]]) {
+    accumulator.add({ ...item, termination: "completed" });
+  }
+  const aggregate = accumulator.snapshot(new Date(2026, 8, 27, 12, 0, 0).getTime(), 30);
+  assert.equal(aggregate.overall.ttftSamples, 0);
+  const state = openPage(
+    createTuiState(buildCatalog(config), {
+      ...status,
+      stats: { enabled: true, retentionDays: 30, aggregate },
+    }),
+    "stats",
+  );
+  const output = renderTui(state, { height: 30, width: 90 });
+
+  assert.match(output, /TTFT 平均 —/);
+  assert.doesNotMatch(output, /TTFT 平均 0ms/);
+});
+
 test("统计页 ↑↓ 切换 routeKind 过滤且不越界", () => {
   let state = openPage(createTuiState(buildCatalog(config), statsStatus), "stats");
   assert.equal(state.statsFilter, 0);

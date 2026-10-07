@@ -115,7 +115,7 @@ test("按天 / provider / model / endpoint / routeKind 分组并计算 p50/p95",
   assert.equal(unroutedTarget?.provider, null);
 });
 
-test("流式输出 tok/s 用 (duration - ttft) 计算，非流式用 duration", () => {
+test("tok/s 只统计流式样本：非流式不参与", () => {
   const result = snapshotOf([
     event({
       stream: true,
@@ -130,12 +130,63 @@ test("流式输出 tok/s 用 (duration - ttft) 计算，非流式用 duration", 
       usage: { input: 0, output: 50, total: 50, cached: null, reasoning: null },
     }),
   ]);
-  // (100 + 50) tokens / ((1000 + 2000) / 1000) s = 50 tok/s
-  assert.equal(result.overall.outputTokensPerSecond, 50);
+  // 只有流式样本参与：100 tokens / (1000ms / 1000) = 100 tok/s；非流式的 50 token 被排除。
+  assert.equal(result.overall.outputTokensPerSecond, 100);
   assert.equal(result.overall.streamRequests, 1);
   assert.equal(result.overall.nonStreamRequests, 1);
   assert.equal(result.overall.ttftSamples, 1);
   assert.equal(result.overall.avgTtftMs, 100);
+});
+
+test("全为非流式时 outputTokensPerSecond 为 null", () => {
+  const result = snapshotOf([
+    event({
+      stream: false,
+      durationMs: 2000,
+      ttftMs: null,
+      usage: { input: 0, output: 50, total: 50, cached: null, reasoning: null },
+    }),
+  ]);
+  assert.equal(result.overall.nonStreamRequests, 1);
+  assert.equal(result.overall.ttftSamples, 0);
+  assert.equal(result.overall.outputTokensPerSecond, null);
+});
+
+test("client_aborted 不产生 tok/s 样本", () => {
+  const result = snapshotOf([
+    event({
+      stream: true,
+      ok: false,
+      status: null,
+      termination: "client_aborted",
+      durationMs: 100,
+      ttftMs: 50,
+      usage: { input: 0, output: 40, total: 40, cached: null, reasoning: null },
+    }),
+  ]);
+  assert.equal(result.overall.outputTokensPerSecond, null);
+});
+
+test("取消请求不进时延统计，但仍计 requests / aborted", () => {
+  const result = snapshotOf([
+    event({ durationMs: 10_000 }),
+    ...Array.from({ length: 9 }, () =>
+      event({ ok: false, status: null, termination: "client_aborted", durationMs: 100 }),
+    ),
+  ]);
+  assert.equal(result.overall.requests, 10);
+  assert.equal(result.overall.aborted, 9);
+  assert.equal(result.overall.errors, 0);
+  // 只剩 1 条真实 10s 请求参与时延：avg / p50 / p95 均停在 10000 档，不被 100ms 取消拉低。
+  assert.equal(result.overall.avgDurationMs, 10_000);
+  assert.equal(result.overall.p50DurationMs, 10_000);
+  assert.equal(result.overall.p95DurationMs, 10_000);
+  // 五层聚合共用 addToBucket / metricsOf：目标切片口径一致。
+  const alpha = result.targets.find((target) => target.provider === "alpha");
+  assert.equal(alpha?.avgDurationMs, 10_000);
+  assert.equal(alpha?.p50DurationMs, 10_000);
+  assert.equal(alpha?.requests, 10);
+  assert.equal(alpha?.aborted, 9);
 });
 
 test("快照丢弃保留期之外的天，累加器不无限增长", () => {
