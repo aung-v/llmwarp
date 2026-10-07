@@ -1,16 +1,13 @@
 import type { TuiPage, TuiState } from "./model.js";
 import {
   ROUTING_OPTIONS,
-  STATS_FILTERS,
-  filteredStatsTargets,
   selectedEntry,
   selectedProvider,
   selectedRouting,
-  selectedStatsFilter,
   selectedStatsIndex,
+  statsTargets,
 } from "./model.js";
 import type { TargetAggregate } from "../stats/aggregate.js";
-import type { RouteKind } from "../stats/event.js";
 import pc from "picocolors";
 
 const ANSI_ESCAPE = /\u001B\[[0-?]*[ -/]*[@-~]|\u001B\][^\u0007]*(?:\u0007|\u001B\\)/g;
@@ -347,8 +344,9 @@ function shortEndpoint(endpoint: string): string {
 }
 
 /**
- * 大数友好显示：计数类与 token 类统一折算 k / M / G，保留 1 位小数并去掉多余的 `.0`。
- * 阈值取 999.5 / 999_950 / 999_950_000，避免出现 `1000.0k` 这种进位后仍然越级的写法。
+ * 大数友好显示：计数类与 token 类统一折算 K / M / G，保留 1 位小数并去掉多余的 `.0`。
+ * 三个单位一律大写，避免同一列里 `k` 与 `M` 大小写混排（`K` 只表示千，不会被读成字节数）。
+ * 阈值取 999.5 / 999_950 / 999_950_000，避免出现 `1000.0K` 这种进位后仍然越级的写法。
  */
 export function formatCount(value: number): string {
   const scale = (divisor: number, unit: string): string => {
@@ -358,7 +356,7 @@ export function formatCount(value: number): string {
   const abs = Math.abs(value);
   if (abs >= 999_950_000) return scale(1_000_000_000, "G");
   if (abs >= 999_950) return scale(1_000_000, "M");
-  if (abs >= 999.5) return scale(1_000, "k");
+  if (abs >= 999.5) return scale(1_000, "K");
   return String(value);
 }
 
@@ -373,34 +371,16 @@ function percent(rate: number): string {
   return `${value >= 10 || value === 0 ? value.toFixed(0) : value.toFixed(1)}%`;
 }
 
-/** routeKind 的中文标签，与统计页过滤器保持一致。 */
-const ROUTE_KIND_LABELS: Record<RouteKind, string> = {
-  warp: "warp 别名",
-  explicit: "按客户端",
-  fallback: "未指定模型",
-  overridden: "被开关覆盖",
-  unrouted: "未发出",
-};
-
-/** 表格里的短标签：同一个上游模型会按 routeKind 拆成多行，必须能区分。 */
-const ROUTE_KIND_SHORT: Record<RouteKind, string> = {
-  warp: "warp",
-  explicit: "客户端",
-  fallback: "回退",
-  overridden: "覆盖",
-  unrouted: "未发出",
-};
-
 /** 选中目标的完整指标详情：每个 AggregateMetrics 字段都必须在这里出现。 */
 function statsDetailRows(target: TargetAggregate | null): string[] {
   if (!target) {
-    return ["", pc.bold("选中详情"), pc.dim("  当前过滤条件下没有目标")];
+    return ["", pc.bold("选中详情"), pc.dim("  当前没有上游目标")];
   }
   const hasTtft = target.ttftSamples > 0;
   return [
     "",
     pc.bold(
-      `选中详情  ${sanitize(target.provider ?? "未发出")}/${sanitize(target.model ?? "—")} · ${sanitize(shortEndpoint(target.endpoint))} · ${ROUTE_KIND_LABELS[target.routeKind]}`,
+      `选中详情  ${sanitize(target.provider ?? "未发出")}/${sanitize(target.model ?? "—")} · ${sanitize(shortEndpoint(target.endpoint))}`,
     ),
     `  延迟   平均 ${target.avgDurationMs}ms · 50分位 ${target.p50DurationMs}ms · 95分位 ${target.p95DurationMs}ms`,
     `         TTFT 平均 ${hasTtft ? `${target.avgTtftMs}ms` : "—"} · TTFT 95分位 ${hasTtft ? `${target.p95TtftMs}ms` : "—"} · 样本 ${formatCount(target.ttftSamples)}`,
@@ -434,7 +414,6 @@ function statsRows(state: TuiState, height: number, width: number): string[] {
 
   const rows: string[] = [];
   const metric = state.statsMetric;
-  const filter = selectedStatsFilter(state);
   const overall = aggregate.overall;
   const days = aggregate.days;
   // hours 是稀疏的（只含真正有请求的小时），所以按「最近 24 个活跃小时」标注，不假造空桶。
@@ -458,46 +437,47 @@ function statsRows(state: TuiState, height: number, width: number): string[] {
     ),
   );
 
-  const filtered = filteredStatsTargets(aggregate, filter.id);
-  const selectedIndex = selectedStatsIndex(state, filtered.length);
-  const filteredRequests = filtered.reduce((sum, target) => sum + target.requests, 0);
-  const filteredErrors = filtered.reduce((sum, target) => sum + target.errors, 0);
-  const detail = statsDetailRows(selectedIndex >= 0 ? (filtered[selectedIndex] ?? null) : null);
+  // 统计只按上游身份聚合（provider + model + endpoint），不再按 routeKind 拆行，表格因此没有「路由」列。
+  const targets = statsTargets(state);
+  const selectedIndex = selectedStatsIndex(state, targets.length);
+  const targetRequests = targets.reduce((sum, target) => sum + target.requests, 0);
+  const targetErrors = targets.reduce((sum, target) => sum + target.errors, 0);
+  const detail = statsDetailRows(selectedIndex >= 0 ? (targets[selectedIndex] ?? null) : null);
 
-  // 空间不够时优先保住详情：扣除「过滤两行 + 表头/分隔线」与详情后，余下的才是目标行。
-  const tableSpace = Math.max(height - rows.length - 2 - 2 - detail.length, 0);
-  const shown = Math.min(filtered.length, tableSpace);
+  // 空间不够时优先保住详情：扣除「命中一行 + 表头/分隔线」与详情后，余下的才是目标行。
+  const tableSpace = Math.max(height - rows.length - 1 - 2 - detail.length, 0);
+  const shown = Math.min(targets.length, tableSpace);
 
   rows.push(
-    `过滤   ${STATS_FILTERS.map((option) =>
-      option.id === filter.id ? pc.bgBlue(pc.white(` ${option.label} `)) : pc.dim(option.label),
-    ).join(" ")}`,
     pc.dim(
-      `      命中 ${formatCount(filteredRequests)} 请求 · 错误 ${formatCount(filteredErrors)} · 未发出 ${formatCount(aggregate.unrouted.requests)}${filtered.length > shown ? ` · 表格显示 ${shown}/${filtered.length} 行` : ""}`,
+      `命中 ${formatCount(targetRequests)} 请求 · 错误 ${formatCount(targetErrors)} · 未发出 ${formatCount(aggregate.unrouted.requests)}${targets.length > shown ? ` · 表格显示 ${shown}/${targets.length} 行` : ""}`,
     ),
   );
 
-  // 8 列（供应商/模型 · 端点 · 路由 · 请求 · 错误率 · 平均 · TTFT · tok/s）：固定宽度 55 + 7 个空格。
+  // 表格列：供应商 / 模型 · [端点] · 请求 · 错误率 · 平均 · TTFT · tok/s。
   // p95 不再进表格（总耗时 p95 混着回答长度，价值低于 TTFT / tok/s），留在选中详情。
-  // 窄终端先牺牲「端点」列（详情里仍有），保证 TTFT / tok/s 这些数值列不被截断。
+  // 「端点」列只有在可见行端点多于一个、且宽度放得下时才出现；窄终端优先保住数值列。
   const endpointWidth = 16;
-  const routeWidth = 7;
-  const showEndpoint = width - 62 >= 12;
-  const labelWidth = Math.max(width - (showEndpoint ? 62 : 45), 8);
-  if (filtered.length === 0) {
-    rows.push("", pc.dim("该过滤条件下暂无请求"));
+  const visibleTargets = targets.slice(0, shown);
+  const hasMixedEndpoints = new Set(visibleTargets.map((target) => target.endpoint)).size > 1;
+  // 端点列要多花 17 列；只有端点多于一个、且标签列仍能保持 20 列以上时才值得显示，
+  // 否则窄终端优先保住 请求 / 错误率 / 平均 / TTFT / tok/s 这些数值列。
+  const showEndpoint = hasMixedEndpoints && width - 54 >= 20;
+  const labelWidth = Math.max(width - (showEndpoint ? 54 : 37), 8);
+  if (targets.length === 0) {
+    rows.push("", pc.dim("暂无上游目标"));
   } else if (tableSpace >= 1) {
     rows.push(
       pc.bold(
-        `${pad("供应商 / 模型", labelWidth)} ${showEndpoint ? `${pad("端点", endpointWidth)} ` : ""}${pad("路由", routeWidth)} ${rightAlign("请求", 6)} ${rightAlign("错误率", 7)} ${rightAlign("平均", 6)} ${rightAlign("TTFT", 6)} ${rightAlign("tok/s", 7)}`,
+        `${pad("供应商 / 模型", labelWidth)} ${showEndpoint ? `${pad("端点", endpointWidth)} ` : ""}${rightAlign("请求", 6)} ${rightAlign("错误率", 7)} ${rightAlign("平均", 6)} ${rightAlign("TTFT", 6)} ${rightAlign("tok/s", 7)}`,
       ),
       pc.dim("─".repeat(Math.max(width, 10))),
     );
-    filtered.slice(0, shown).forEach((target, index) => {
-      // 旧载荷可能仍带 provider 为空的目标（新代码不再产生）；标签与过滤行统一用「未发出」。
+    visibleTargets.forEach((target, index) => {
+      // 旧载荷可能仍带 provider 为空的目标（新代码不再产生）；标签统一用「未发出」。
       const label = `${sanitize(target.provider ?? "未发出")}/${sanitize(target.model ?? "—")}`;
       const ttft = target.ttftSamples > 0 ? `${target.avgTtftMs}ms` : "—";
-      const line = `${pad(label, labelWidth)} ${showEndpoint ? `${pad(shortEndpoint(sanitize(target.endpoint)), endpointWidth)} ` : ""}${pad(ROUTE_KIND_SHORT[target.routeKind], routeWidth)} ${rightAlign(formatCount(target.requests), 6)} ${rightAlign(percent(target.errorRate), 7)} ${rightAlign(`${target.avgDurationMs}ms`, 6)} ${rightAlign(ttft, 6)} ${rightAlign(formatRate(target.outputTokensPerSecond), 7)}`;
+      const line = `${pad(label, labelWidth)} ${showEndpoint ? `${pad(shortEndpoint(sanitize(target.endpoint)), endpointWidth)} ` : ""}${rightAlign(formatCount(target.requests), 6)} ${rightAlign(percent(target.errorRate), 7)} ${rightAlign(`${target.avgDurationMs}ms`, 6)} ${rightAlign(ttft, 6)} ${rightAlign(formatRate(target.outputTokensPerSecond), 7)}`;
       rows.push(index === selectedIndex ? pc.bgBlue(pc.white(line)) : line);
     });
   }
@@ -645,7 +625,7 @@ export function renderTui(
   const keyHint = state.switching
     ? "处理中… 请稍候（Ctrl-C 可退出）"
     : state.page === "stats"
-      ? "↑↓ 选择目标  f 过滤  Enter 指标  h 天/小时  ←→ 换页  r 刷新  q 退出"
+      ? "↑↓ 选择目标  Enter 指标  h 天/小时  ←→ 换页  r 刷新  q 退出"
       : "↑↓ 选中  ←→ 换区/换页  Enter 确认  Esc 取消  r 刷新  q 退出";
   const message = state.message && !state.switching && !state.confirming ? state.message : null;
   const footerText = message

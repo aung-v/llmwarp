@@ -127,7 +127,6 @@ interface StatsPayload {
         provider: string | null;
         model: string | null;
         endpoint: string;
-        routeKind: string;
         requests: number;
         errors: number;
       }[];
@@ -235,18 +234,21 @@ test("统计按解析后的真实上游归属，unrouted 不进供应商错误�
   );
 
   const alphaTargets = aggregatePayload.targets.filter((target) => target.provider === "alpha");
-  assert.equal(alphaTargets.length, 4);
+  // 四个 alpha 请求按上游身份聚合：三个落到 alpha-chat，一个 fallback 的 model 为 null。
+  assert.equal(alphaTargets.length, 2);
   for (const target of alphaTargets) {
     assert.equal(target.errors, 0, `provider 错误率分母不得混入 unrouted：${JSON.stringify(target)}`);
   }
   assert.deepEqual(
-    [...new Set(alphaTargets.map((target) => target.routeKind))].sort(),
-    ["explicit", "fallback", "overridden", "warp"],
+    alphaTargets.map((target) => target.endpoint),
+    ["/v1/chat/completions", "/v1/chat/completions"],
   );
-  const fallbackTarget = alphaTargets.find((target) => target.routeKind === "fallback");
+  const chatTarget = alphaTargets.find((target) => target.model === "alpha-chat");
+  assert.equal(chatTarget?.requests, 3, "warp / explicit / overridden 合并进同一上游目标");
+  const fallbackTarget = alphaTargets.find((target) => target.model === null);
   assert.equal(fallbackTarget?.model, null);
+  assert.equal(fallbackTarget?.requests, 1);
   // 路由失败不产生目标分组：targets 里既没有 unrouted，也没有 provider=null 的行。
-  assert.equal(aggregatePayload.targets.some((target) => target.routeKind === "unrouted"), false);
   assert.equal(aggregatePayload.targets.every((target) => target.provider !== null), true);
 
   // 上游请求体：include_usage 仅在流式 chat/completions 注入；overridden 落到 alpha 且改写模型

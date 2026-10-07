@@ -12,7 +12,6 @@ import {
   buildCatalog,
   cancelConfirm,
   createTuiState,
-  cycleStatsFilter,
   finishSwitch,
   finishSuspended,
   focusNext,
@@ -22,10 +21,9 @@ import {
   pushEvent,
   restoreStatsView,
   selectedProvider,
-  selectedStatsFilter,
   selectedStatsIndex,
   selectedStatsTarget,
-  STATS_FILTERS,
+  statsTargets,
   toggleStatsRange,
   toggleStatsMetric,
   TUI_PAGES,
@@ -683,14 +681,15 @@ function sampleStatsEvents(): RequestEvent[] {
     {
       ts: day,
       provider: "ark",
-      model: "glm-5.3-flash",
+      // 第二个上游目标：与上面两个 warp 事件 provider / endpoint 相同但 model 不同。
+      model: "glm-5.3-pro",
       endpoint: "/v1/chat/completions",
       stream: false,
       status: 429,
       ok: false,
       durationMs: 300,
       ttftMs: null,
-      requestedModel: "ark/glm-5.3-flash",
+      requestedModel: "ark/glm-5.3-pro",
       routeKind: "overridden",
       routingMode: false,
       usage: null,
@@ -763,9 +762,10 @@ test("统计页渲染按天火花线与 provider 切片，且不泄露密钥", (
   assert.match(output, /TTFT 平均 200ms/);
   assert.match(output, /ark\/glm-5\.3-flash/);
   assert.match(output, /chat\/completions/);
-  assert.match(output, /全部/);
-  assert.match(output, /被开关覆盖/);
-  // 路由失败已不再作为过滤项；未发出的计数仍显示在过滤行。
+  // 统计只按上游身份展示：没有路由列 / 过滤行，未发出的计数仍在命中行。
+  assert.doesNotMatch(output, /被开关覆盖/);
+  assert.doesNotMatch(output, /路由\s+请求/);
+  assert.doesNotMatch(output, /过滤/);
   assert.doesNotMatch(output, /路由失败/);
   assert.match(output, /未发出/);
   assert.doesNotMatch(output, /secret-key/);
@@ -829,12 +829,12 @@ test("统计页无 TTFT 样本时汇总行显示 — 而不是 0ms", () => {
 test("统计页 ↑↓ 在目标表格里移动选中行且不越界", () => {
   let state = openPage(createTuiState(buildCatalog(config), statsStatus), "stats");
   assert.equal(state.statsSelected, 0);
-  assert.equal(selectedStatsTarget(state)?.routeKind, "warp");
+  assert.equal(selectedStatsTarget(state)?.model, "glm-5.3-flash");
   assert.equal(selectedStatsIndex(state, 2), 0);
 
   state = moveSelection(state, 1);
   assert.equal(state.statsSelected, 1);
-  assert.equal(selectedStatsTarget(state)?.routeKind, "overridden");
+  assert.equal(selectedStatsTarget(state)?.model, "glm-5.3-pro");
 
   state = moveSelection(state, 10);
   assert.equal(state.statsSelected, 1, "越界收敛到末行");
@@ -842,30 +842,6 @@ test("统计页 ↑↓ 在目标表格里移动选中行且不越界", () => {
   assert.equal(state.statsSelected, 0);
   assert.equal(selectedStatsIndex(state, 0), -1);
   assert.equal(selectedStatsTarget({ ...state, status: null }), null);
-});
-
-test("统计页 f 循环 routeKind 过滤且不越界", () => {
-  let state = openPage(createTuiState(buildCatalog(config), statsStatus), "stats");
-  assert.equal(state.statsFilter, 0);
-  assert.equal(selectedStatsFilter(state).id, "all");
-  // 路由失败不再是过滤项，键位只在剩余选项间循环。
-  assert.equal(STATS_FILTERS.some((option) => option.id === "unrouted"), false);
-
-  state = cycleStatsFilter(state, 1);
-  assert.equal(selectedStatsFilter(state).id, "warp");
-  state = cycleStatsFilter(state, 10);
-  assert.equal(state.statsFilter, STATS_FILTERS.length - 1);
-  assert.equal(selectedStatsFilter(state).id, "overridden");
-  state = cycleStatsFilter(state, -10);
-  assert.equal(state.statsFilter, 0);
-
-  // 过滤变化后选中行回到首行，避免指向被过滤掉的目标。
-  state = { ...state, statsSelected: 1 };
-  state = cycleStatsFilter(state, 1);
-  assert.equal(state.statsSelected, 0);
-
-  const modelsState = createTuiState(buildCatalog(config), statsStatus);
-  assert.equal(cycleStatsFilter(modelsState, 1), modelsState);
 });
 
 test("统计页 h 在按天 / 按小时粒度间切换，小时火花线消费 aggregate.hours", () => {
@@ -906,16 +882,16 @@ test("统计页选中目标详情覆盖延迟 / 吞吐 / token / 可靠性全部
   const state = openPage(createTuiState(buildCatalog(config), statsStatus), "stats");
   const output = renderTui(state, { height: 34, width: 100 });
 
-  assert.match(output, /选中详情\s+ark\/glm-5\.3-flash · chat\/completions · warp 别名/);
+  assert.match(output, /选中详情\s+ark\/glm-5\.3-flash · chat\/completions/);
   assert.match(output, /平均 560ms · 50分位 150ms · 95分位 1000ms/);
   assert.match(output, /TTFT 平均 200ms · TTFT 95分位 200ms · 样本 1/);
   assert.match(output, /吞吐\s+25 tok\/s · 流式 1 · 非流式 1/);
   assert.match(output, /token\s+输入 110 · 输出 220 · 总 330 · 缓存 50 · 推理 5/);
   assert.match(output, /可靠性 请求 2 · 错误 0（0%）· 中断 0 · 截断 0 · 拦截 0/);
 
-  // 选中行变化后详情跟随（第二个目标是「被开关覆盖」）。
+  // 选中行变化后详情跟随（第二个目标是另一个上游 model）。
   const movedOutput = renderTui(moveSelection(state, 1), { height: 34, width: 100 });
-  assert.match(movedOutput, /选中详情\s+ark\/glm-5\.3-flash · chat\/completions · 被开关覆盖/);
+  assert.match(movedOutput, /选中详情\s+ark\/glm-5\.3-pro · chat\/completions/);
   assert.match(movedOutput, /平均 300ms · 50分位 300ms · 95分位 300ms/);
   assert.match(movedOutput, /TTFT 平均 — · TTFT 95分位 — · 样本 0/);
   assert.match(movedOutput, /吞吐\s+— tok\/s · 流式 0 · 非流式 1/);
@@ -928,7 +904,7 @@ test("自动刷新恢复统计页视图状态，并按身份重定位选中目�
     statsRange: "hour" as const,
     statsSelected: 0,
   };
-  assert.equal(selectedStatsTarget(before)?.routeKind, "warp");
+  assert.equal(selectedStatsTarget(before)?.model, "glm-5.3-flash");
 
   // 刷新后目标顺序反转（请求量排序随流量漂移）：下标要跟着身份走。
   const reordered: StatusSnapshot = {
@@ -943,7 +919,7 @@ test("自动刷新恢复统计页视图状态，并按身份重定位选中目�
   assert.equal(restored.statsRange, "hour");
   assert.equal(restored.statsMetric, before.statsMetric);
   assert.equal(restored.statsSelected, 1, "下标随目标身份移动");
-  assert.equal(selectedStatsTarget(restored)?.routeKind, "warp");
+  assert.equal(selectedStatsTarget(restored)?.model, "glm-5.3-flash");
 
   // 目标消失时回到首行，不越界。
   const empty = restoreStatsView(
@@ -957,28 +933,79 @@ test("自动刷新恢复统计页视图状态，并按身份重定位选中目�
   assert.equal(selectedStatsTarget(empty), null);
 });
 
-test("统计页目标表格用路由列区分同一上游模型的多个 target", () => {
+test("统计页目标表格没有路由列 / 过滤行，按上游身份列出目标", () => {
   const state = openPage(createTuiState(buildCatalog(config), statsStatus), "stats");
-  const lines = renderTui(state, { height: 34, width: 100 }).split("\n");
+  const output = renderTui(state, { height: 34, width: 100 });
+  const header = output.split("\n").find((line) => line.includes("供应商 / 模型")) ?? "";
 
-  assert.ok(
-    lines.some((line) => /路由\s+请求/.test(line)),
-    "表头应包含路由列",
-  );
-  const warpRow = lines.find((line) => line.includes("ark/glm-5.3-flash") && line.includes("warp"));
-  const overriddenRow = lines.find((line) => line.includes("ark/glm-5.3-flash") && line.includes("覆盖"));
-  assert.ok(warpRow, "缺少 warp 目标行");
-  assert.ok(overriddenRow, "缺少被开关覆盖目标行");
-  assert.notEqual(warpRow, overriddenRow);
+  assert.match(header, /请求/);
+  assert.doesNotMatch(header, /路由/);
+  assert.doesNotMatch(output, /过滤/);
+
+  const targets = statsTargets(state);
+  assert.equal(targets.length, 2);
+  assert.equal(targets[0]?.model, "glm-5.3-flash");
+  assert.equal(targets[0]?.requests, 2);
+  assert.equal(targets[1]?.model, "glm-5.3-pro");
+  // 目标不再携带 routeKind 维度。
+  assert.equal((targets[0] as unknown as Record<string, unknown> | undefined)?.routeKind, undefined);
+
+  const lines = output.split("\n");
+  assert.ok(lines.some((line) => line.includes("ark/glm-5.3-flash")));
+  assert.ok(lines.some((line) => line.includes("ark/glm-5.3-pro")));
   assert.notEqual(
     renderTui(moveSelection(state, 1), { height: 34, width: 100 }),
     renderTui(state, { height: 34, width: 100 }),
   );
 });
 
+test("统计页端点列仅在可见行端点多于一个且宽度允许时出现", () => {
+  const mixed: StatusSnapshot = {
+    ...statsStatus,
+    stats: {
+      enabled: true,
+      retentionDays: 30,
+      aggregate: {
+        ...statsAggregate,
+        targets: statsAggregate.targets.map((target, index) =>
+          index === 1 ? { ...target, endpoint: "/v1/responses" } : target,
+        ),
+      },
+    },
+  };
+
+  const wide = renderTui(openPage(createTuiState(buildCatalog(config), mixed), "stats"), {
+    height: 34,
+    width: 100,
+  });
+  const wideHeader = wide.split("\n").find((line) => line.includes("供应商 / 模型")) ?? "";
+  assert.match(wideHeader, /端点/);
+  assert.match(wide, /responses/);
+  for (const line of wide.split("\n").filter((row) => /^[╭│╰]/.test(row))) {
+    assert.equal(visibleWidth(line), 100);
+  }
+
+  // 可见行共享同一端点：即使宽度足够也不显示端点列（常量列自动隐藏）。
+  const constant = renderTui(openPage(createTuiState(buildCatalog(config), statsStatus), "stats"), {
+    height: 34,
+    width: 100,
+  });
+  assert.doesNotMatch(constant, /端点/);
+
+  // 窄终端即使端点多于一个也先让位给数值列。
+  const narrow = renderTui(openPage(createTuiState(buildCatalog(config), mixed), "stats"), {
+    height: 34,
+    width: 72,
+  });
+  assert.doesNotMatch(narrow, /端点/);
+  for (const line of narrow.split("\n").filter((row) => /^[╭│╰]/.test(row))) {
+    assert.equal(visibleWidth(line), 72);
+  }
+});
+
 test("统计页窄窗口下优先保留选中目标详情并报告隐藏行数", () => {
   const state = openPage(createTuiState(buildCatalog(config), statsStatus), "stats");
-  const output = renderTui(state, { height: 24, width: 72 });
+  const output = renderTui(state, { height: 23, width: 72 });
 
   for (const line of output.split("\n").filter((row) => /^[╭│╰]/.test(row))) {
     assert.equal(visibleWidth(line), 72);
@@ -990,20 +1017,21 @@ test("统计页窄窗口下优先保留选中目标详情并报告隐藏行数",
   assert.match(output, /吞吐\s+25 tok\/s · 流式 1 · 非流式 1/);
   assert.match(output, /推理 5/);
   assert.match(output, /可靠性 请求 2 · 错误 0（0%）· 中断 0 · 截断 0 · 拦截 0/);
-  assert.match(output, /表格显示 \d\/2 行/);
-  // 72 列窄终端：牺牲「端点」列，保住 TTFT / tok/s 这类数值列。
+  // 表格确实让位（只显示 1/2 行），而不是把两行都塞下、注释里说的隐藏没发生。
+  assert.match(output, /表格显示 1\/2 行/);
+  // 可见行共享同一端点，端点列自动隐藏；窄终端仍保住 TTFT / tok/s 这类数值列。
   assert.match(output, /tok\/s/);
   assert.doesNotMatch(output, /端点/);
 });
 
-test("formatCount 把大数折算成 k / M / G", () => {
+test("formatCount 把大数折算成 K / M / G", () => {
   assert.equal(formatCount(0), "0");
   assert.equal(formatCount(999), "999");
-  assert.equal(formatCount(999.5), "1k");
-  assert.equal(formatCount(1000), "1k");
-  assert.equal(formatCount(1200), "1.2k");
-  assert.equal(formatCount(205460), "205.5k");
-  assert.equal(formatCount(999949), "999.9k");
+  assert.equal(formatCount(999.5), "1K");
+  assert.equal(formatCount(1000), "1K");
+  assert.equal(formatCount(1200), "1.2K");
+  assert.equal(formatCount(205460), "205.5K");
+  assert.equal(formatCount(999949), "999.9K");
   assert.equal(formatCount(999950), "1M");
   assert.equal(formatCount(31575899), "31.6M");
   assert.equal(formatCount(999950000), "1G");
@@ -1025,7 +1053,7 @@ test("统计页表格直接给出 tok/s，p95 / p50 只留在选中详情", () =
   }
 });
 
-test("统计页把 token 大数折算成 k / M", () => {
+test("统计页把 token 大数折算成 K / M", () => {
   const accumulator = new AggregateAccumulator();
   const sample = sampleStatsEvents();
   accumulator.add({
@@ -1047,7 +1075,7 @@ test("统计页把 token 大数折算成 k / M", () => {
     "stats",
   );
   const output = renderTui(state, { height: 34, width: 100 });
-  assert.match(output, /输入 12M · 输出 1\.3M · 总 13\.3M · 缓存 3\.4M · 推理 999\.4k/);
+  assert.match(output, /输入 12M · 输出 1\.3M · 总 13\.3M · 缓存 3\.4M · 推理 999\.4K/);
 });
 
 test("统计页 Enter 在 token / 请求数之间切换", () => {
@@ -1099,15 +1127,16 @@ test("统计页在离线 / 未启用 / 无聚合时都不崩溃", () => {
   assert.match(noAggregate, /暂无法读取统计/);
 });
 
-test("统计页渲染不越界且过滤后仍显示命中数", () => {
-  let state = openPage(createTuiState(buildCatalog(config), statsStatus), "stats");
-  state = { ...state, statsFilter: STATS_FILTERS.findIndex((option) => option.id === "overridden") };
+test("统计页渲染不越界且命中行汇总所有上游目标", () => {
+  const state = openPage(createTuiState(buildCatalog(config), statsStatus), "stats");
   const output = renderTui(state, { height: 30, width: 90 });
 
   for (const line of output.split("\n").filter((row) => /^[╭│╰]/.test(row))) {
     assert.equal(visibleWidth(line), 90);
   }
-  assert.match(output, /命中 1 请求 · 错误 1/);
+  // 命中 = 所有 targets 之和（= overall，unrouted 单独计数）。
+  assert.match(output, /命中 3 请求 · 错误 1/);
+  assert.match(output, /未发出 1/);
 });
 
 test("parseStatusSnapshot 解析 stats 聚合与非法输入", () => {
@@ -1117,9 +1146,15 @@ test("parseStatusSnapshot 解析 stats 聚合与非法输入", () => {
   assert.equal(parsed?.stats?.retentionDays, 30);
   assert.equal(parsed?.stats?.aggregate?.overall.requests, 3);
   assert.equal(parsed?.stats?.aggregate?.targets.length, 2);
+  assert.deepEqual(
+    parsed?.stats?.aggregate?.targets.map((target) => target.model),
+    ["glm-5.3-flash", "glm-5.3-pro"],
+  );
   assert.equal(
-    parsed?.stats?.aggregate?.targets.some((target) => target.routeKind === "overridden"),
-    true,
+    parsed?.stats?.aggregate?.targets.some(
+      (target) => (target as unknown as Record<string, unknown>).routeKind !== undefined,
+    ),
+    false,
   );
 
   const invalid = parseStatusSnapshot({

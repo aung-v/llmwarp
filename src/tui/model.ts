@@ -6,7 +6,6 @@ import type {
   HourAggregate,
   TargetAggregate,
 } from "../stats/aggregate.js";
-import type { RouteKind } from "../stats/event.js";
 
 export interface StatusSnapshot {
   active: { provider: string; model: string | null } | null;
@@ -63,23 +62,6 @@ export type TuiPage = "models" | "routing" | "providers" | "stats";
 /** 顶部导航顺序，也决定 ←→ 换页循环顺序。 */
 export const TUI_PAGES: TuiPage[] = ["models", "routing", "providers", "stats"];
 
-/** 统计页的 routeKind 过滤器；`all` 表示不过滤。 */
-export type StatsFilter = "all" | RouteKind;
-
-export interface StatsFilterOption {
-  id: StatsFilter;
-  label: string;
-}
-
-/** 统计页过滤器顺序，也决定 ↑↓ 循环顺序。 */
-export const STATS_FILTERS: StatsFilterOption[] = [
-  { id: "all", label: "全部" },
-  { id: "warp", label: "warp 别名" },
-  { id: "explicit", label: "按客户端" },
-  { id: "fallback", label: "未指定模型" },
-  { id: "overridden", label: "被开关覆盖" },
-];
-
 /** 火花线指标：token 总量 / 请求数。 */
 export type StatsMetric = "tokens" | "requests";
 
@@ -131,10 +113,9 @@ export interface TuiState {
   message: string | null;
   switching: boolean;
   useClientModel: boolean;
-  statsFilter: number;
   statsMetric: StatsMetric;
   statsRange: StatsRange;
-  /** 选中的目标行（过滤后列表里的下标）；越界时按末行处理。 */
+  /** 选中的目标行（目标列表里的下标）；越界时按末行处理。 */
   statsSelected: number;
 }
 
@@ -210,7 +191,6 @@ export function createTuiState(
     message: null,
     switching: false,
     useClientModel,
-    statsFilter: 0,
     statsMetric: "tokens",
     statsRange: "day",
     statsSelected: 0,
@@ -268,8 +248,8 @@ export function moveSelection(state: TuiState, delta: number): TuiState {
   }
 
   if (state.page === "stats") {
-    // ↑↓ 在目标表格里移动选中行（与其它页「↑↓ 选中」保持一致）；过滤走 `f`。
-    const count = filteredStatsTargets(currentAggregate(state), selectedStatsFilter(state).id).length;
+    // ↑↓ 在目标表格里移动选中行（与其它页「↑↓ 选中」保持一致）。
+    const count = statsTargets(state).length;
     const next = Math.min(Math.max(state.statsSelected + delta, 0), Math.max(count - 1, 0));
     return { ...state, statsSelected: next };
   }
@@ -280,10 +260,6 @@ export function moveSelection(state: TuiState, delta: number): TuiState {
 
 export function selectedRouting(state: TuiState): RoutingOption {
   return ROUTING_OPTIONS[state.routingSelected] ?? ROUTING_OPTIONS[0];
-}
-
-export function selectedStatsFilter(state: TuiState): StatsFilterOption {
-  return STATS_FILTERS[state.statsFilter] ?? STATS_FILTERS[0];
 }
 
 /** 统计页 Enter：在 token / 请求数两种火花线指标间切换。 */
@@ -298,75 +274,46 @@ export function toggleStatsRange(state: TuiState): TuiState {
   return { ...state, statsRange: state.statsRange === "day" ? "hour" : "day" };
 }
 
-/** 统计页 `f`：循环 routeKind 过滤；过滤变化后选中行回到首行。 */
-export function cycleStatsFilter(state: TuiState, delta: number): TuiState {
-  if (navigationLocked(state) || state.page !== "stats") return state;
-  const next = Math.min(Math.max(state.statsFilter + delta, 0), STATS_FILTERS.length - 1);
-  return { ...state, statsFilter: next, statsSelected: 0 };
+/** 统计页的目标列表（上游身份：provider + model + endpoint）；渲染、选中、刷新重定位共用同一份顺序。 */
+export function statsTargets(state: TuiState): TargetAggregate[] {
+  return state.status?.stats?.aggregate?.targets ?? [];
 }
 
-function currentAggregate(state: TuiState): Aggregate | null {
-  return state.status?.stats?.aggregate ?? null;
-}
-
-/** 统计页当前过滤后的目标列表；渲染、选中、刷新重定位共用同一份顺序。 */
-export function filteredStatsTargets(
-  aggregate: Aggregate | null,
-  filter: StatsFilter,
-): TargetAggregate[] {
-  if (!aggregate) return [];
-  return filter === "all"
-    ? aggregate.targets
-    : aggregate.targets.filter((target) => target.routeKind === filter);
-}
-
-/** 选中行在过滤后列表里的有效下标；空列表返回 -1。 */
+/** 选中行在目标列表里的有效下标；空列表返回 -1。 */
 export function selectedStatsIndex(state: TuiState, count: number): number {
   if (count <= 0) return -1;
   return Math.min(Math.max(state.statsSelected, 0), count - 1);
 }
 
-/** 统计页当前选中的上游目标；过滤后没有目标时为 null。 */
+/** 统计页当前选中的上游目标；没有目标时为 null。 */
 export function selectedStatsTarget(state: TuiState): TargetAggregate | null {
-  const targets = filteredStatsTargets(currentAggregate(state), selectedStatsFilter(state).id);
+  const targets = statsTargets(state);
   const index = selectedStatsIndex(state, targets.length);
   return index >= 0 ? (targets[index] ?? null) : null;
 }
 
-/** 目标身份：刷新后按这四个键重新定位选中行（排序会随流量变化）。 */
+/** 目标身份：刷新后按这三个键重新定位选中行（排序会随流量变化）。 */
 export function sameStatsTarget(a: TargetAggregate, b: TargetAggregate): boolean {
-  return (
-    a.provider === b.provider &&
-    a.model === b.model &&
-    a.endpoint === b.endpoint &&
-    a.routeKind === b.routeKind
-  );
+  return a.provider === b.provider && a.model === b.model && a.endpoint === b.endpoint;
 }
 
 /** 刷新后把旧的选中目标映射回新列表；找不到就回到首行。 */
-export function locateStatsTarget(
-  aggregate: Aggregate | null,
-  filter: StatsFilter,
-  target: TargetAggregate | null,
-): number {
+export function locateStatsTarget(targets: TargetAggregate[], target: TargetAggregate | null): number {
   if (!target) return 0;
-  const index = filteredStatsTargets(aggregate, filter).findIndex((item) => sameStatsTarget(item, target));
+  const index = targets.findIndex((item) => sameStatsTarget(item, target));
   return index >= 0 ? index : 0;
 }
 
 /**
- * 刷新时恢复统计页的纯视图状态（过滤 / 指标 / 粒度 / 选中目标）。
+ * 刷新时恢复统计页的纯视图状态（指标 / 粒度 / 选中目标）。
  * 目标行按请求量排序，下标会随流量漂移，所以选中行按身份重新定位而不是沿用下标。
  */
 export function restoreStatsView(previous: TuiState, next: TuiState): TuiState {
-  const aggregate = next.status?.stats?.aggregate ?? null;
-  const target = selectedStatsTarget(previous);
   return {
     ...next,
-    statsFilter: previous.statsFilter,
     statsMetric: previous.statsMetric,
     statsRange: previous.statsRange,
-    statsSelected: locateStatsTarget(aggregate, selectedStatsFilter(previous).id, target),
+    statsSelected: locateStatsTarget(statsTargets(next), selectedStatsTarget(previous)),
   };
 }
 
@@ -508,8 +455,6 @@ const METRIC_KEYS = [
   "nonStreamRequests",
 ] as const;
 
-const ROUTE_KINDS: RouteKind[] = ["warp", "explicit", "fallback", "overridden", "unrouted"];
-
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
@@ -581,13 +526,12 @@ function parseAggregate(payload: unknown): Aggregate | null {
       const metrics = parseMetrics(item);
       if (!metrics) return null;
       if (typeof record.endpoint !== "string") return null;
-      if (!ROUTE_KINDS.includes(record.routeKind as RouteKind)) return null;
+      // 新 daemon 不再返回 routeKind；旧 daemon 仍带该字段，直接忽略即可，不影响解析。
       targets.push({
         ...metrics,
         provider: typeof record.provider === "string" ? record.provider : null,
         model: typeof record.model === "string" ? record.model : null,
         endpoint: record.endpoint,
-        routeKind: record.routeKind as RouteKind,
       });
     }
   }

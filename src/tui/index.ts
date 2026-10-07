@@ -30,7 +30,6 @@ import {
   buildCatalog,
   cancelConfirm,
   createTuiState,
-  cycleStatsFilter,
   focusNext,
   focusPrev,
   finishSuspended,
@@ -234,7 +233,7 @@ export async function startTui(): Promise<void> {
       // 供应商页同理：光标和删除目标要保住，且供应商减少后要收敛到有效范围。
       state.providerCursor = Math.min(previousProviderCursor, Math.max(providers.length + 1, 0));
       state.providerSelected = Math.min(previousProviderSelected, Math.max(providers.length - 1, 0));
-      // 统计页的过滤 / 指标 / 粒度 / 选中目标都是纯视图状态，自动刷新不能重置。
+      // 统计页的指标 / 粒度 / 选中目标都是纯视图状态，自动刷新不能重置。
       state = restoreStatsView(base, state);
       if (previousConfirming === "switch") {
         state.confirming = state.entries[state.selected]?.selectable ? "switch" : null;
@@ -456,13 +455,7 @@ export async function startTui(): Promise<void> {
       return;
     }
 
-    // 统计页局部视图键：f 循环过滤，h 切换火花线粒度；都是只读操作，不涉及写。
-    if (!key.ctrl && state.page === "stats" && key.name === "f") {
-      state = cycleStatsFilter(state, 1);
-      draw();
-      return;
-    }
-
+    // 统计页局部视图键：h 切换火花线粒度；只读操作，不涉及写。
     if (!key.ctrl && state.page === "stats" && key.name === "h") {
       state = toggleStatsRange(state);
       draw();

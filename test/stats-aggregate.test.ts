@@ -65,14 +65,36 @@ test("全错误与无 usage 的事件按边界处理", () => {
   assert.equal(result.overall.inputTokens, 0);
   assert.equal(result.overall.outputTokensPerSecond, null);
   // 仅 unrouted 事件被排除，真实上游错误仍留在 targets。
-  assert.equal(result.targets.some((target) => target.routeKind === "unrouted"), false);
+  assert.equal(result.targets.every((target) => target.provider !== null), true);
   assert.equal(result.targets.length, 1);
   assert.equal(result.unrouted.requests, 1);
   assert.equal(result.unrouted.errors, 1);
   assert.equal(result.overall.requests + result.unrouted.requests, 2);
 });
 
-test("按天 / provider / model / endpoint / routeKind 分组并计算 p50/p95", () => {
+test("同一上游身份下 routeKind 不同的事件合并为一个目标并累加请求", () => {
+  const result = snapshotOf([
+    event({ routeKind: "warp", durationMs: 100 }),
+    event({ routeKind: "overridden", durationMs: 300, ok: false, status: 429 }),
+  ]);
+
+  // 上游身份 = provider + model + endpoint；routeKind 只决定 unrouted，不进分组。
+  assert.equal(result.targets.length, 1);
+  const target = result.targets[0];
+  assert.equal(target.provider, "alpha");
+  assert.equal(target.model, "alpha-chat");
+  assert.equal(target.endpoint, "/v1/chat/completions");
+  assert.equal(target.requests, 2);
+  assert.equal(target.errors, 1);
+  assert.equal(result.overall.requests, 2);
+  assert.equal(
+    result.targets.reduce((sum, item) => sum + item.requests, 0),
+    result.overall.requests,
+  );
+  assert.equal(result.unrouted.requests, 0);
+});
+
+test("按天 / provider / model / endpoint 分组并计算 p50/p95", () => {
   const day1 = new Date(2026, 8, 26, 10, 0, 0).getTime();
   const day2 = new Date(2026, 8, 27, 10, 0, 0).getTime();
   const result = snapshotOf([
@@ -105,10 +127,9 @@ test("按天 / provider / model / endpoint / routeKind 分组并计算 p50/p95",
   assert.equal(alpha?.requests, 2);
   assert.equal(alpha?.errors, 1);
 
-  // beta 的两条事件路由键相同，合并为一个切片
+  // beta 的两条事件上游身份相同，合并为一个切片
   const beta = result.targets.filter((target) => target.provider === "beta");
   assert.equal(beta.length, 1);
-  assert.equal(beta[0].routeKind, "explicit");
   assert.equal(beta[0].requests, 2);
   assert.equal(beta[0].errors, 0);
   assert.equal(beta[0].truncations, 1);
@@ -117,7 +138,6 @@ test("按天 / provider / model / endpoint / routeKind 分组并计算 p50/p95",
   assert.equal(result.unrouted.errors, 1);
 
   // 路由失败不进目标分组：targets 中不存在 unrouted，且总体请求数等于各目标之和。
-  assert.equal(result.targets.some((target) => target.routeKind === "unrouted"), false);
   assert.equal(result.targets.every((target) => target.provider !== null), true);
   assert.equal(
     result.targets.reduce((sum, target) => sum + target.requests, 0),

@@ -10,7 +10,7 @@
  * 固定桶数即可，得到「≤ 该边界」的近似分位。代价是分位落在桶的边界上，不再精确到 1ms；
  * 换取的是查询成本恒定。边界见 `LATENCY_BOUNDS`。
  */
-import type { RequestEvent, RouteKind } from "./event.js";
+import type { RequestEvent } from "./event.js";
 import { dayKey, hourKey, recentDayKeys } from "./store.js";
 
 export interface AggregateMetrics {
@@ -37,11 +37,14 @@ export interface AggregateMetrics {
   nonStreamRequests: number;
 }
 
+/**
+ * 上游目标：统计只描述「上游」本身，因此分组键是 provider + model + endpoint。
+ * 同一个上游模型的流量不按 routeKind 拆分——从哪个入口进来不是上游的属性。
+ */
 export interface TargetAggregate extends AggregateMetrics {
   provider: string | null;
   model: string | null;
   endpoint: string;
-  routeKind: RouteKind;
 }
 
 export interface DayAggregate extends AggregateMetrics {
@@ -97,7 +100,6 @@ interface TargetState {
   provider: string | null;
   model: string | null;
   endpoint: string;
-  routeKind: RouteKind;
   bucket: Bucket;
 }
 
@@ -254,8 +256,9 @@ function metricsOf(bucket: Bucket): AggregateMetrics {
   };
 }
 
+/** 上游身份键：provider + model + endpoint。routeKind 只用于 unrouted 判定，不参与分组。 */
 function targetKey(event: RequestEvent): string {
-  return [event.provider ?? "\u0000", event.model ?? "\u0000", event.endpoint, event.routeKind].join("\u0001");
+  return [event.provider ?? "\u0000", event.model ?? "\u0000", event.endpoint].join("\u0001");
 }
 
 /**
@@ -298,7 +301,6 @@ export class AggregateAccumulator {
         provider: event.provider,
         model: event.model,
         endpoint: event.endpoint,
-        routeKind: event.routeKind,
         bucket: emptyBucket(),
       };
       state.targets.set(key, target);
@@ -336,7 +338,6 @@ export class AggregateAccumulator {
             provider: target.provider,
             model: target.model,
             endpoint: target.endpoint,
-            routeKind: target.routeKind,
             bucket: emptyBucket(),
           };
           targets.set(key, accumulated);
@@ -353,7 +354,6 @@ export class AggregateAccumulator {
         provider: target.provider,
         model: target.model,
         endpoint: target.endpoint,
-        routeKind: target.routeKind,
       }))
       .sort(
         (a, b) =>

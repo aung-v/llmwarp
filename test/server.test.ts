@@ -173,7 +173,7 @@ test("代理：改写 model、注入密钥、透传 SSE、管理端点鉴权", {
       aggregate: {
         overall: { requests: number; errors: number };
         unrouted: { requests: number };
-        targets: { provider: string | null; model: string | null; routeKind: string }[];
+        targets: { provider: string | null; model: string | null; endpoint: string }[];
       } | null;
     };
   };
@@ -187,14 +187,14 @@ test("代理：改写 model、注入密钥、透传 SSE、管理端点鉴权", {
   assert.equal(status.metrics.recent[0]?.model, "real-model");
   assert.equal(status.metrics.recent[0]?.status, 200);
 
-  // 历史统计：两条 /v1 请求都落一条事件，显式路由与 warp 各归各的 routeKind
+  // 历史统计：两条 /v1 请求都落一条事件；warp 走 /v1/stream，显式请求走 /v1/chat/completions，端点不同故是两个上游目标。
   assert.equal(status.stats.enabled, true);
   assert.equal(status.stats.aggregate?.overall.requests, 2);
   assert.equal(status.stats.aggregate?.overall.errors, 0);
   assert.equal(status.stats.aggregate?.unrouted.requests, 0);
   assert.deepEqual(
-    status.stats.aggregate?.targets.map((target) => target.routeKind).sort(),
-    ["explicit", "warp"],
+    status.stats.aggregate?.targets.map((target) => target.endpoint).sort(),
+    ["/v1/chat/completions", "/v1/stream"],
   );
   assert.equal(
     status.stats.aggregate?.targets.every(
