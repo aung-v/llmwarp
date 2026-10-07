@@ -158,3 +158,26 @@ Fixed the TUI daemon start/restart path: admin/readiness fetches now have timeou
 ### Status
 
 [OK] **Completed**
+
+
+## Session 7: Usage and performance statistics for /v1
+<!-- trellis-session: v=2 fp=13b5296b901c58cb -->
+
+**Date**: 2026-10-07
+**Task**: Usage and performance statistics for /v1
+**Branch**: `master`
+
+### Summary
+
+Built the self-use statistics feature for llmwarp. An observable proxy pipeline now records per-request usage tokens (input/output/cached/reasoning), TTFT, finish reason and upstream x-ratelimit headers without changing /v1 bytes or SSE streaming; requests are attributed to the resolved upstream target and tagged warp | explicit | fallback | overridden | unrouted so the routing switch cannot hide the client's model, and unrouted requests are excluded from every provider error denominator. Events persist as per-day JSONL under CONFIG_DIR/stats with a retention window, the aggregate is cached for GET /_llmwarp/status, and a new read-only fourth TUI page renders a daily token sparkline plus provider/model tables. Deliberately out of scope: cost/price tables, rate-limit quota dashboards, Prometheus/OTLP export, and a llmwarp stats CLI (visualization stays in the TUI). Version bumped to 1.1.0. Review caught and fixed four real defects: dropped 400s on body-read failure, client aborts counted as success, a 120ms synchronous JSONL re-read on every 3s TUI poll, and lost observations on stream errors. Verified: typecheck, build, 13/13 tests with 0 skipped, plus a new specs doc backend/usage-stats.md.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `698fb35` | feat(stats): /v1 usage, performance and reliability statistics |
+| `92256e6` | test: gate socket integration tests for restricted sandboxes |
+
+### Status
+
+[OK] **Completed**

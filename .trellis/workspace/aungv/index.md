@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 6
-- **Last Active**: 2026-10-05
+- **Total Sessions**: 7
+- **Last Active**: 2026-10-07
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~160 | Active |
+| `journal-1.md` | ~183 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 7 | 2026-10-07 | Usage and performance statistics for /v1 | `698fb35`, `92256e6` | `master` |
 | 6 | 2026-10-05 | TUI daemon lifecycle, feedback panel, and provider management | `bbaa223` | `master` |
 | 5 | 2026-09-30 | TUI model routing mode toggle | `9a737f7` | `master` |
 | 4 | 2026-09-30 | Guard activeModel writes inside updateActive | `22a4d8c` | `master` |
