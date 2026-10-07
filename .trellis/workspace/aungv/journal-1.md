@@ -495,3 +495,42 @@ Follow-up to the stats feature, done outside a Trellis task at the user's reques
 ### Next Steps
 
 - 用户重启 TUI 后确认；若仍复现，需要 rows/cols 与实际终端尺寸
+
+
+## Session 18: TUI 整帧重绘改用绝对定位：根治导航栏叠层
+<!-- trellis-session: v=2 fp=c511815e054d8eee -->
+
+**Date**: 2026-10-07
+**Task**: TUI 整帧重绘改用绝对定位：根治导航栏叠层
+**Branch**: `master`
+
+### Summary
+
+旧协议 ESC[H+帧+ESC[J 依赖 \n 回列、每行补宽、终端不在底部滚屏三件事；\n 不回列时补满整宽的行会从上一行结尾那列继续写，屏幕上叠出第二层导航栏。改用 frameToAnsi() 逐行绝对定位 + EL 擦尾 + ED 清屏，draw() 传 height=rows-1。
+
+### Main Changes
+
+- render.ts 新增 frameToAnsi()：每行 ESC[<row>;1H + ESC[K，帧尾 ESC[J，输出无裸换行
+- index.ts draw() 改用 frameToAnsi，帧高限制为 rows-1，永不落在终端最后一行
+- renderTui() 收尾 .slice(0, height) 兜底；最小高度 22 -> 12
+- spec interaction-guidelines 改写为绝对定位契约；重开 10-07-tui-frame-leftover 并补真因/AC/break-loop 复盘
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `48114cb` | fix(tui): 整帧改用绝对定位重绘，杜绝导航栏叠层 |
+| `84f29f9` | chore(task): 重开 10-07-tui-frame-leftover 并补第二轮 PRD |
+
+### Testing
+
+- [OK] npm run typecheck / npm test(170 pass) / npm run build 全绿，版本仍 1.1.0
+- [OK] pty 真机字节流在延迟/立即回绕两种终端模型下重放：滚屏 0 次，屏幕只有一条导航栏；变异回旧协议回归用例转红
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 真机肉眼确认仍需人工做；width<72 的窄终端折行与 rows<13 布局是已知范围外限制
