@@ -112,3 +112,85 @@ test("观测解析器：上游无 usage / 非 JSON 时降级为 null 且不抛�
   assert.equal(observations[0].finishReason, null);
   assert.equal(observations[0].ttftMs, null);
 });
+
+test("观测解析器：Responses 终态事件置 terminal 并从 response.usage 解析", () => {
+  const observations: UpstreamObservation[] = [];
+  const parser = createObservationParser({
+    isSse: true,
+    startedAt: 0,
+    now: () => 30,
+    observer: (observation) => observations.push(observation),
+  });
+  parser.push(Buffer.from('data: {"type":"response.output_text.delta","delta":"hi"}\n\n'));
+  parser.push(
+    Buffer.from(
+      'data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":5,"output_tokens":6,"total_tokens":11}}}\n\n',
+    ),
+  );
+  parser.finish(200, new Headers());
+
+  assert.equal(observations.length, 1);
+  assert.equal(observations[0].terminal, true);
+  assert.equal(observations[0].upstreamError, false);
+  assert.equal(observations[0].usage?.total, 11);
+  assert.equal(observations[0].ttftMs, 30);
+});
+
+test("观测解析器：close 补结算保留 TTFT，markUpstreamError 随观测传出且 finish 幂等", () => {
+  const observations: UpstreamObservation[] = [];
+  const parser = createObservationParser({
+    isSse: true,
+    startedAt: 100,
+    now: () => 180,
+    observer: (observation) => observations.push(observation),
+  });
+  parser.push(Buffer.from('data: {"choices":[{"delta":{"content":"a"}}]}\n\n'));
+  // 模拟代理层在 res "close" 上的补结算：未见终态，但首块 TTFT 必须保留。
+  parser.finish(200, new Headers());
+  parser.finish(200, new Headers());
+  assert.equal(observations.length, 1);
+  assert.equal(observations[0].ttftMs, 80);
+  assert.equal(observations[0].terminal, false);
+  assert.equal(observations[0].upstreamError, false);
+
+  const errors: UpstreamObservation[] = [];
+  const errorParser = createObservationParser({
+    isSse: true,
+    startedAt: 0,
+    observer: (observation) => errors.push(observation),
+  });
+  errorParser.push(Buffer.from('data: {"choices":[{"delta":{"content":"a"}}]}\n\n'));
+  errorParser.markUpstreamError();
+  errorParser.finish(200, new Headers());
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].upstreamError, true);
+});
+
+test("观测解析器：chat 流收到 finish_reason / [DONE] 后置终态", () => {
+  const finishObservations: UpstreamObservation[] = [];
+  const finishParser = createObservationParser({
+    isSse: true,
+    startedAt: 0,
+    observer: (observation) => finishObservations.push(observation),
+  });
+  finishParser.push(Buffer.from('data: {"choices":[{"delta":{"content":"a"}}]}\n\n'));
+  finishParser.push(Buffer.from('data: {"choices":[{"finish_reason":"stop","delta":{}}]}\n\n'));
+  // 客户端在收到 finish_reason 后断开：close 补结算时 terminal 必须为真，记成功而非 client_aborted。
+  finishParser.finish(200, new Headers());
+  assert.equal(finishObservations.length, 1);
+  assert.equal(finishObservations[0].terminal, true);
+  assert.equal(finishObservations[0].finishReason, "stop");
+
+  const doneObservations: UpstreamObservation[] = [];
+  const doneParser = createObservationParser({
+    isSse: true,
+    startedAt: 0,
+    observer: (observation) => doneObservations.push(observation),
+  });
+  doneParser.push(Buffer.from('data: {"choices":[{"delta":{"content":"x"}}]}\n\n'));
+  doneParser.push(Buffer.from("data: [DONE]\n\n"));
+  doneParser.finish(200, new Headers());
+  assert.equal(doneObservations.length, 1);
+  assert.equal(doneObservations[0].terminal, true);
+  assert.equal(doneObservations[0].finishReason, null);
+});

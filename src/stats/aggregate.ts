@@ -16,6 +16,8 @@ import { dayKey, hourKey, recentDayKeys } from "./store.js";
 export interface AggregateMetrics {
   requests: number;
   errors: number;
+  /** 客户端主动取消的请求数（`client_aborted`），单独计数、不进错误率分母。 */
+  aborted: number;
   errorRate: number;
   avgDurationMs: number;
   p50DurationMs: number;
@@ -70,6 +72,7 @@ const MAX_BOUND = LATENCY_BOUNDS[LATENCY_BOUNDS.length - 1];
 interface Bucket {
   requests: number;
   errors: number;
+  aborted: number;
   streamRequests: number;
   nonStreamRequests: number;
   durationSum: number;
@@ -107,6 +110,7 @@ function emptyBucket(): Bucket {
   return {
     requests: 0,
     errors: 0,
+    aborted: 0,
     streamRequests: 0,
     nonStreamRequests: 0,
     durationSum: 0,
@@ -140,7 +144,9 @@ function recordDuration(hist: Uint32Array, value: number): void {
 
 function addToBucket(bucket: Bucket, event: RequestEvent): void {
   bucket.requests += 1;
-  if (!event.ok) bucket.errors += 1;
+  // 客户端自己取消不算服务失败：单独计 aborted，不计入 errors。
+  if (event.termination === "client_aborted") bucket.aborted += 1;
+  else if (!event.ok) bucket.errors += 1;
   if (event.stream) bucket.streamRequests += 1;
   else bucket.nonStreamRequests += 1;
   bucket.durationSum += event.durationMs;
@@ -172,6 +178,7 @@ function addToBucket(bucket: Bucket, event: RequestEvent): void {
 function mergeInto(target: Bucket, source: Bucket): void {
   target.requests += source.requests;
   target.errors += source.errors;
+  target.aborted += source.aborted;
   target.streamRequests += source.streamRequests;
   target.nonStreamRequests += source.nonStreamRequests;
   target.durationSum += source.durationSum;
@@ -210,10 +217,12 @@ function round(value: number, digits = 0): number {
 }
 
 function metricsOf(bucket: Bucket): AggregateMetrics {
+  const failureBase = Math.max(bucket.requests - bucket.aborted, 1);
   return {
     requests: bucket.requests,
     errors: bucket.errors,
-    errorRate: bucket.requests > 0 ? round(bucket.errors / bucket.requests, 4) : 0,
+    aborted: bucket.aborted,
+    errorRate: round(bucket.errors / failureBase, 4),
     avgDurationMs: bucket.requests > 0 ? round(bucket.durationSum / bucket.requests) : 0,
     p50DurationMs: histogramPercentile(bucket.duration, bucket.requests, 50),
     p95DurationMs: histogramPercentile(bucket.duration, bucket.requests, 95),

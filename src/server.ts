@@ -18,7 +18,7 @@ import { RequestMetrics } from "./metrics.js";
 import { accessLines } from "./endpoint.js";
 import { portInUseMessage, findPortOwner } from "./net.js";
 import { debugLog } from "./debuglog.js";
-import { classifyRoute, type RequestEvent, type RouteKind } from "./stats/event.js";
+import { classifyRoute, type RequestEvent, type RouteKind, type Termination } from "./stats/event.js";
 import { StatsCollector } from "./stats/collect.js";
 import type { Aggregate } from "./stats/aggregate.js";
 
@@ -194,9 +194,34 @@ async function handleProxy(
   const finalize = (): void => {
     if (completed) return;
     completed = true;
-    const finalStatus = status;
     const durationMs = Date.now() - startedAt;
     const observation = observationRef.current;
+
+    // 判定表见 design.md §3：res.finish 优先；否则看上游是否已给终态 / 是否流中断 / 客户端断开。
+    // 「已见终态事件后客户端断开」记成功；「未见终态的客户端断开」单独计为 client_aborted。
+    // 例外：Responses 的 response.failed 是 HTTP 200 + 终态事件，finishReason="error"，
+    // 即使流完整送达也必须记失败，不能因为状态码是 2xx 就沿用成功。
+    const failedTerminal = observation?.finishReason === "error";
+    let finalStatus: number | null;
+    let ok: boolean;
+    let termination: Termination;
+    if (status !== null) {
+      finalStatus = status;
+      ok = status < 400 && !failedTerminal;
+      termination = "completed";
+    } else if (observation?.terminal) {
+      finalStatus = observation.status;
+      ok = !failedTerminal;
+      termination = "completed";
+    } else if (observation?.upstreamError) {
+      finalStatus = null;
+      ok = false;
+      termination = "upstream_error";
+    } else {
+      finalStatus = null;
+      ok = false;
+      termination = "client_aborted";
+    }
 
     router.metrics.record({
       method: req.method ?? "GET",
@@ -205,7 +230,7 @@ async function handleProxy(
       model,
       status: finalStatus,
       durationMs,
-      ok: finalStatus !== null && finalStatus < 400,
+      ok,
     });
 
     const event: RequestEvent = {
@@ -215,7 +240,7 @@ async function handleProxy(
       endpoint: url.pathname,
       stream: bodyInfo.stream,
       status: finalStatus,
-      ok: finalStatus !== null && finalStatus < 400,
+      ok,
       durationMs,
       ttftMs: observation?.ttftMs ?? null,
       requestedModel: bodyInfo.requestedModel ?? null,
@@ -224,6 +249,7 @@ async function handleProxy(
       usage: observation?.usage ?? null,
       finishReason: observation?.finishReason ?? null,
       rateLimit: observation?.rateLimit ?? null,
+      termination,
     };
     router.stats.record(event);
   };
@@ -236,8 +262,10 @@ async function handleProxy(
   res.once("close", () => {
     if (!res.writableFinished) {
       // 客户端中途断开（未 finish）不是成功，按失败记录而不是沿用已发出的 2xx。
+      // 代理层的 res "close" 监听器在本监听器之后才补结算观测（parser.finish），
+      // 故延后一个微任务再 finalize，确保能读到 TTFT / usage / terminal。
       status = null;
-      finalize();
+      queueMicrotask(finalize);
     }
   });
 

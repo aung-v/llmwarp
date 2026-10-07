@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import http from "node:http";
@@ -22,6 +22,38 @@ const socketSkip = await skipWithoutSockets();
  */
 function resetStatsDir(): void {
   rmSync(join(CONFIG_DIR, "stats"), { recursive: true, force: true });
+}
+
+interface PersistedEvent {
+  ok: boolean;
+  status: number | null;
+  termination?: string | null;
+  ttftMs: number | null;
+  usage: { input: number; output: number; total: number } | null;
+  finishReason: string | null;
+}
+
+/** 直接读落盘 JSONL：聚合快照不暴露 termination / ttftMs 的逐条取值。 */
+function readStatsEvents(): PersistedEvent[] {
+  const dir = join(CONFIG_DIR, "stats");
+  let files: string[] = [];
+  try {
+    files = readdirSync(dir).filter((name) => name.endsWith(".jsonl"));
+  } catch {
+    return [];
+  }
+  const events: PersistedEvent[] = [];
+  for (const file of files) {
+    for (const line of readFileSync(join(dir, file), "utf8").split("\n")) {
+      if (line.trim().length === 0) continue;
+      try {
+        events.push(JSON.parse(line) as PersistedEvent);
+      } catch {
+        // 损坏行忽略
+      }
+    }
+  }
+  return events;
 }
 
 async function freePort(): Promise<number> {
@@ -385,7 +417,7 @@ test("统计：客户端中途断开记为失败，不沿用已发出的 2xx 状
 
   type AbortStatus = {
     metrics: { totalRequests: number; totalErrors: number; recent: { ok: boolean; status: number | null }[] };
-    stats: { aggregate: { overall: { requests: number; errors: number } } | null };
+    stats: { aggregate: { overall: { requests: number; errors: number; aborted: number } } | null };
   };
   let snapshot: AbortStatus | null = null;
   for (let attempt = 0; attempt < 50; attempt += 1) {
@@ -404,5 +436,263 @@ test("统计：客户端中途断开记为失败，不沿用已发出的 2xx 状
   assert.equal(snapshot.metrics.recent[0]?.ok, false);
   assert.equal(snapshot.metrics.recent[0]?.status, null);
   assert.equal(snapshot.stats.aggregate?.overall.requests, 1);
+  // 客户端自行取消不算服务失败：单独计 aborted，不进 errors / 错误率分母。
+  assert.equal(snapshot.stats.aggregate?.overall.errors, 0);
+  assert.equal(snapshot.stats.aggregate?.overall.aborted, 1);
+  const events = readStatsEvents();
+  assert.equal(events.length, 1);
+  assert.equal(events[0].termination, "client_aborted");
+  // close 路径必须补结算：已收到首块，TTFT 不能丢。
+  assert.notEqual(events[0].ttftMs, null);
+});
+
+test("统计：上游流中断记为 upstream_error 并计入错误", { skip: socketSkip }, async (t) => {
+  resetStatsDir();
+  const upstream = http.createServer((req, res) => {
+    if (req.url?.includes("chat/completions")) {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write('data: {"choices":[{"delta":{"content":"a"}}]}\n\n');
+      // 已开始转发后掐断上游连接：路由器的上游 body 流会以 error 结束。
+      setTimeout(() => res.socket?.destroy(), 20);
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end("{}");
+  });
+  await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", () => resolve()));
+  const upstreamPort = (upstream.address() as { port: number }).port;
+  t.after(async () => {
+    upstream.closeAllConnections();
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+  });
+
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  writeFileSync(
+    CONFIG_PATH,
+    JSON.stringify({
+      port: 0,
+      activeProvider: "errfake",
+      activeModel: "emodel",
+      providers: {
+        errfake: {
+          baseUrl: `http://127.0.0.1:${upstreamPort}/v1`,
+          apiKey: "${MY_TEST_KEY}",
+          models: ["emodel"],
+        },
+      },
+    }),
+  );
+
+  const port = await freePort();
+  const handle = await startServer({ port });
+  t.after(async () => handle.close());
+
+  const res = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "warp", stream: true, messages: [] }),
+  });
+  try {
+    await res.text();
+  } catch {
+    // 上游中断，客户端读流失败属预期
+  }
+
+  type Snapshot = {
+    metrics: { totalRequests: number };
+    stats: { aggregate: { overall: { requests: number; errors: number; aborted: number } } | null };
+  };
+  let snapshot: Snapshot | null = null;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const statusRes = await fetch(`http://127.0.0.1:${port}/_llmwarp/status`, {
+      headers: { "x-llmwarp-token": handle.token },
+    });
+    const body = (await statusRes.json()) as Snapshot;
+    if (body.metrics.totalRequests >= 1) {
+      snapshot = body;
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.ok(snapshot, "上游中断的请求也应被记录");
   assert.equal(snapshot.stats.aggregate?.overall.errors, 1);
+  assert.equal(snapshot.stats.aggregate?.overall.aborted, 0);
+  const events = readStatsEvents();
+  assert.equal(events.length, 1);
+  assert.equal(events[0].termination, "upstream_error");
+  assert.equal(events[0].ok, false);
+  assert.equal(events[0].status, null);
+});
+
+test("统计：已见 Responses 终态后客户端断开记成功", { skip: socketSkip }, async (t) => {
+  resetStatsDir();
+  const upstream = http.createServer((req, res) => {
+    if (req.url?.includes("responses")) {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write('event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"hi"}\n\n');
+      res.write(
+        'event: response.completed\ndata: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":9,"output_tokens":4,"total_tokens":13,"input_tokens_details":{"cached_tokens":2},"output_tokens_details":{"reasoning_tokens":1}}}}\n\n',
+      );
+      // 终态已发出但保持连接，等待客户端断开。
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end("{}");
+  });
+  await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", () => resolve()));
+  const upstreamPort = (upstream.address() as { port: number }).port;
+  t.after(async () => {
+    upstream.closeAllConnections();
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+  });
+
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  writeFileSync(
+    CONFIG_PATH,
+    JSON.stringify({
+      port: 0,
+      activeProvider: "respfake",
+      activeModel: "rmodel",
+      providers: {
+        respfake: {
+          baseUrl: `http://127.0.0.1:${upstreamPort}/v1`,
+          apiKey: "${MY_TEST_KEY}",
+          models: ["rmodel"],
+        },
+      },
+    }),
+  );
+
+  const port = await freePort();
+  const handle = await startServer({ port });
+  t.after(async () => handle.close());
+
+  const controller = new AbortController();
+  const streamRes = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "warp", stream: true, input: "hi" }),
+    signal: controller.signal,
+  });
+  const reader = streamRes.body!.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  while (!text.includes("response.completed")) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    text += decoder.decode(value, { stream: true });
+  }
+  controller.abort();
+  try {
+    await reader.cancel();
+  } catch {
+    // 已中断
+  }
+
+  type Snapshot = {
+    metrics: { totalRequests: number; totalErrors: number };
+    stats: {
+      aggregate: { overall: { requests: number; errors: number; aborted: number; outputTokens: number } } | null;
+    };
+  };
+  let snapshot: Snapshot | null = null;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const statusRes = await fetch(`http://127.0.0.1:${port}/_llmwarp/status`, {
+      headers: { "x-llmwarp-token": handle.token },
+    });
+    const body = (await statusRes.json()) as Snapshot;
+    if (body.metrics.totalRequests >= 1) {
+      snapshot = body;
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.ok(snapshot, "终态后断开的请求也应被记录");
+  assert.equal(snapshot.stats.aggregate?.overall.errors, 0);
+  assert.equal(snapshot.stats.aggregate?.overall.aborted, 0);
+  assert.equal(snapshot.stats.aggregate?.overall.outputTokens, 4);
+  const events = readStatsEvents();
+  assert.equal(events.length, 1);
+  assert.equal(events[0].termination, "completed");
+  assert.equal(events[0].ok, true);
+  assert.equal(events[0].usage?.total, 13);
+  assert.notEqual(events[0].ttftMs, null);
+});
+
+test("统计：Responses 终态为 failed 记为错误而非成功", { skip: socketSkip }, async (t) => {
+  resetStatsDir();
+  const upstream = http.createServer((req, res) => {
+    if (req.url?.includes("responses")) {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write('event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"hi"}\n\n');
+      // Responses 的失败是 HTTP 200 + response.failed 终态事件，且流仍会正常结束。
+      res.write('event: response.failed\ndata: {"type":"response.failed","response":{"status":"failed"}}\n\n');
+      res.end();
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end("{}");
+  });
+  await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", () => resolve()));
+  const upstreamPort = (upstream.address() as { port: number }).port;
+  t.after(async () => {
+    upstream.closeAllConnections();
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+  });
+
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  writeFileSync(
+    CONFIG_PATH,
+    JSON.stringify({
+      port: 0,
+      activeProvider: "failfake",
+      activeModel: "fmodel",
+      providers: {
+        failfake: {
+          baseUrl: `http://127.0.0.1:${upstreamPort}/v1`,
+          apiKey: "${MY_TEST_KEY}",
+          models: ["fmodel"],
+        },
+      },
+    }),
+  );
+
+  const port = await freePort();
+  const handle = await startServer({ port });
+  t.after(async () => handle.close());
+
+  const streamRes = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "warp", stream: true, input: "hi" }),
+  });
+  assert.equal(streamRes.status, 200);
+  const text = await streamRes.text();
+  assert.match(text, /response\.failed/);
+
+  type Snapshot = {
+    metrics: { totalRequests: number };
+    stats: { aggregate: { overall: { requests: number; errors: number; aborted: number } } | null };
+  };
+  let snapshot: Snapshot | null = null;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const statusRes = await fetch(`http://127.0.0.1:${port}/_llmwarp/status`, {
+      headers: { "x-llmwarp-token": handle.token },
+    });
+    const body = (await statusRes.json()) as Snapshot;
+    if (body.metrics.totalRequests >= 1) {
+      snapshot = body;
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.ok(snapshot, "failed 终态的请求也应被记录");
+  assert.equal(snapshot.stats.aggregate?.overall.errors, 1);
+  assert.equal(snapshot.stats.aggregate?.overall.aborted, 0);
+  const events = readStatsEvents();
+  assert.equal(events.length, 1);
+  assert.equal(events[0].termination, "completed");
+  assert.equal(events[0].finishReason, "error");
+  assert.equal(events[0].status, 200);
+  assert.equal(events[0].ok, false);
 });

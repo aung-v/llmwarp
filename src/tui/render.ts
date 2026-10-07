@@ -382,7 +382,7 @@ function statsRows(state: TuiState, height: number, width: number): string[] {
     `${metric === "tokens" ? "Token" : "请求"} ${spark || "—"}`,
     `汇总  请求 ${overall.requests} · 错误 ${overall.errors}（${percent(overall.errorRate)}）· 平均 ${overall.avgDurationMs}ms · p95 ${overall.p95DurationMs}ms`,
     pc.dim(
-      `      TTFT 平均 ${overall.avgTtftMs}ms · 输出 ${overall.outputTokensPerSecond ?? "—"} tok/s · 截断 ${overall.truncations} · 拦截 ${overall.contentFiltered}`,
+      `      TTFT 平均 ${overall.avgTtftMs}ms · 输出 ${overall.outputTokensPerSecond ?? "—"} tok/s · 截断 ${overall.truncations} · 拦截 ${overall.contentFiltered} · 中断 ${overall.aborted}`,
     ),
     pc.dim(
       `      token 输入 ${overall.inputTokens} · 输出 ${overall.outputTokens} · 缓存 ${overall.cachedTokens} · 推理 ${overall.reasoningTokens}`,
@@ -409,11 +409,12 @@ function statsRows(state: TuiState, height: number, width: number): string[] {
   );
   rows.push("");
 
-  const labelWidth = Math.max(width - 47, 12);
+  // 7 列（供应商/模型 · 端点 · 请求 · 错误率 · 平均 · TTFT · p95）：固定宽度 47 + 6 个空格。
+  const labelWidth = Math.max(width - 54, 8);
   const endpointWidth = 16;
   rows.push(
     pc.bold(
-      `${pad("供应商 / 模型", labelWidth)} ${pad("端点", endpointWidth)} ${rightAlign("请求", 5)} ${rightAlign("错误率", 7)} ${rightAlign("平均", 6)} ${rightAlign("p95", 6)}`,
+      `${pad("供应商 / 模型", labelWidth)} ${pad("端点", endpointWidth)} ${rightAlign("请求", 5)} ${rightAlign("错误率", 7)} ${rightAlign("平均", 6)} ${rightAlign("TTFT", 6)} ${rightAlign("p95", 7)}`,
     ),
   );
   rows.push(pc.dim("─".repeat(Math.max(width, 10))));
@@ -424,8 +425,9 @@ function statsRows(state: TuiState, height: number, width: number): string[] {
   } else {
     for (const target of filtered.slice(0, Math.max(available, 0))) {
       const label = `${sanitize(target.provider ?? "未路由")}/${sanitize(target.model ?? "—")}`;
+      const ttft = target.ttftSamples > 0 ? `${target.avgTtftMs}ms` : "—";
       rows.push(
-        `${pad(label, labelWidth)} ${pad(shortEndpoint(sanitize(target.endpoint)), endpointWidth)} ${rightAlign(String(target.requests), 5)} ${rightAlign(percent(target.errorRate), 7)} ${rightAlign(`${target.avgDurationMs}ms`, 6)} ${rightAlign(`${target.p95DurationMs}ms`, 6)}`,
+        `${pad(label, labelWidth)} ${pad(shortEndpoint(sanitize(target.endpoint)), endpointWidth)} ${rightAlign(String(target.requests), 5)} ${rightAlign(percent(target.errorRate), 7)} ${rightAlign(`${target.avgDurationMs}ms`, 6)} ${rightAlign(ttft, 6)} ${rightAlign(`${target.p95DurationMs}ms`, 7)}`,
       );
     }
     if (filtered.length > Math.max(available, 0)) {

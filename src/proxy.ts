@@ -4,6 +4,7 @@ import { joinUrl, stripVersionPrefix } from "./config.js";
 import {
   parseFinishReason,
   parseRateLimitHeaders,
+  parseResponseTerminal,
   parseUsage,
   type RateLimitInfo,
   type UsageInfo,
@@ -125,6 +126,10 @@ export interface UpstreamObservation {
   usage: UsageInfo | null;
   finishReason: string | null;
   rateLimit: RateLimitInfo | null;
+  /** 上游是否已给出终态（Responses 的 response.completed / incomplete / failed）。 */
+  terminal: boolean;
+  /** 上游响应流是否以 error 结束（连接中断）。 */
+  upstreamError: boolean;
 }
 
 export interface ProxyOptions {
@@ -161,12 +166,19 @@ export function createObservationParser(options: ObservationParserOptions) {
   let truncated = false;
   let lineBuffer = "";
   let done = false;
+  let terminal = false;
+  let upstreamError = false;
 
   const scanLine = (line: string): void => {
     const trimmed = line.trim();
     if (!trimmed.startsWith("data:")) return;
     const data = trimmed.slice(5).trim();
-    if (data.length === 0 || data === "[DONE]") return;
+    if (data.length === 0) return;
+    // OpenAI 兼容流的终态信号：显式 [DONE]，或任一 chunk 带非空 finish_reason。
+    if (data === "[DONE]") {
+      terminal = true;
+      return;
+    }
     let parsed: unknown;
     try {
       parsed = JSON.parse(data);
@@ -174,7 +186,16 @@ export function createObservationParser(options: ObservationParserOptions) {
       return;
     }
     usage = parseUsage(parsed) ?? usage;
-    finishReason = parseFinishReason(parsed) ?? finishReason;
+    const parsedReason = parseFinishReason(parsed);
+    if (parsedReason !== null) {
+      finishReason = parsedReason;
+      terminal = true;
+    }
+    const terminalInfo = parseResponseTerminal(parsed);
+    if (terminalInfo.terminal) {
+      terminal = true;
+      finishReason = finishReason ?? terminalInfo.finishReason;
+    }
   };
 
   const now = options.now ?? Date.now;
@@ -211,6 +232,11 @@ export function createObservationParser(options: ObservationParserOptions) {
         const parsed = JSON.parse(Buffer.concat(captured).toString("utf8"));
         usage = parseUsage(parsed) ?? usage;
         finishReason = parseFinishReason(parsed) ?? finishReason;
+        const terminalInfo = parseResponseTerminal(parsed);
+        if (terminalInfo.terminal) {
+          terminal = true;
+          finishReason = finishReason ?? terminalInfo.finishReason;
+        }
       } catch {
         // 非 JSON 响应体，降级为无 token
       }
@@ -221,6 +247,8 @@ export function createObservationParser(options: ObservationParserOptions) {
       usage,
       finishReason,
       rateLimit: parseRateLimitHeaders(headers),
+      terminal,
+      upstreamError,
     };
     try {
       options.observer?.(result);
@@ -229,7 +257,11 @@ export function createObservationParser(options: ObservationParserOptions) {
     }
   };
 
-  return { push, finish };
+  const markUpstreamError = (): void => {
+    upstreamError = true;
+  };
+
+  return { push, finish, markUpstreamError };
 }
 
 /** 透明转发：改写 model、注入密钥、SSE 边收边发；可选地把观测结果回调给采集层。 */
@@ -279,10 +311,16 @@ export async function proxyRequest(
   stream.on("data", (chunk: Buffer) => parser.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
   stream.on("end", () => parser.finish(upstream.status, upstream.headers));
   stream.on("error", () => {
-    // 上游流中断：先结算已解析到的头 / 部分 usage，再销毁响应；请求按失败记录。
+    // 上游流中断：先标记错误并结算已解析到的头 / 部分 usage，再销毁响应；请求按失败记录。
+    parser.markUpstreamError();
     parser.finish(upstream.status, upstream.headers);
     res.destroy();
   });
-  res.on("close", () => stream.destroy());
+  res.on("close", () => {
+    // 正常结束时 stream "end" 已结算过（parser.finish 幂等）；只有客户端提前断开才需要补结算，
+    // 否则已解析的 TTFT / usage 会随流销毁一起丢失。
+    if (!res.writableFinished) parser.finish(upstream.status, upstream.headers);
+    stream.destroy();
+  });
   stream.pipe(res);
 }

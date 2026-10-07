@@ -436,9 +436,11 @@ function parseMetrics(payload: unknown): AggregateMetrics | null {
   for (const key of METRIC_KEYS) {
     (metrics as unknown as Record<string, unknown>)[key] = value[key];
   }
+  // `aborted` 是后加字段：兼容尚未重启、仍返回旧结构的 daemon，缺字段按 0。
   metrics.outputTokensPerSecond = isFiniteNumber(value.outputTokensPerSecond)
     ? value.outputTokensPerSecond
     : null;
+  metrics.aborted = isFiniteNumber(value.aborted) ? value.aborted : 0;
   return metrics;
 }
 

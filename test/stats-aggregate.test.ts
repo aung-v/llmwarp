@@ -149,3 +149,27 @@ test("快照丢弃保留期之外的天，累加器不无限增长", () => {
   assert.equal(result.overall.requests, 1);
   assert.equal(accumulator.trackedDays, 1);
 });
+
+test("client_aborted 单独计数，不进错误率分母", () => {
+  const result = snapshotOf([
+    event({ ok: false, status: null, termination: "client_aborted" }),
+    event({ termination: "completed" }),
+  ]);
+  assert.equal(result.overall.requests, 2);
+  assert.equal(result.overall.aborted, 1);
+  assert.equal(result.overall.errors, 0);
+  assert.equal(result.overall.errorRate, 0);
+});
+
+test("upstream_error 计入错误，错误率分母扣除 client_aborted", () => {
+  const result = snapshotOf([
+    event({ ok: false, status: null, termination: "upstream_error" }),
+    event({ ok: false, status: null, termination: "client_aborted" }),
+    event({ termination: "completed" }),
+  ]);
+  assert.equal(result.overall.requests, 3);
+  assert.equal(result.overall.errors, 1);
+  assert.equal(result.overall.aborted, 1);
+  // 1 / (3 - 1)
+  assert.equal(result.overall.errorRate, 0.5);
+});

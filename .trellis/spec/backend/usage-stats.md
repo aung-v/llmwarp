@@ -12,10 +12,12 @@
 ### 2. Signatures
 
 - `src/stats/event.ts`
-  - `interface RequestEvent { ts; provider; model; endpoint; stream; status; ok; durationMs; ttftMs; requestedModel; routeKind; routingMode; usage; finishReason; rateLimit }`
+  - `interface RequestEvent { ts; provider; model; endpoint; stream; status; ok; durationMs; ttftMs; requestedModel; routeKind; routingMode; usage; finishReason; rateLimit; termination? }`
   - `type RouteKind = "warp" | "explicit" | "fallback" | "overridden" | "unrouted"`
-  - `parseUsage(payload: unknown): UsageInfo | null`
+  - `type Termination = "completed" | "client_aborted" | "upstream_error"` (absent on rows written before this contract existed)
+  - `parseUsage(payload: unknown): UsageInfo | null` — accepts a chat-style body, a bare `usage` object, or a Responses event (`response.usage`)
   - `parseFinishReason(payload: unknown): string | null`
+  - `parseResponseTerminal(payload: unknown): { finishReason: string | null; terminal: boolean }` — Responses terminal signal (`response.completed` / `response.incomplete` / `response.failed` by `type`, or `object: "response"` + terminal `status`)
   - `parseRateLimitHeaders(headers: Headers): RateLimitInfo | null`
   - `parseDurationMs(raw: string | null): number | null`
   - `classifyRoute(requestedModel, resolved, useClientModel): RouteKind`
@@ -31,11 +33,13 @@
   - `isEnabled: boolean`, `retention: number`, `aggregate: Aggregate`, `record(event): void`, `pruneNow(at?): string[]`, `configure({ enabled, retentionDays }): void`
 - `src/stats/aggregate.ts`
   - `new AggregateAccumulator()`, `.add(event): void`, `.snapshot(now?, retentionDays?): Aggregate` -> `{ overall, days, hours, targets, unrouted }`, `.trackedDays: number`
+  - `AggregateMetrics` carries `aborted` (client-cancelled requests) next to `errors` / `errorRate`
   - `histogramPercentile(hist: Uint32Array, total: number, p: number): number`
   - `LATENCY_BOUNDS: readonly number[]` (ms bucket upper edges)
 - `src/proxy.ts`
   - `proxyRequest(req, res, { upstreamUrl, apiKey, model, body?, startedAt?, includeUsage?, observer? })`
-  - `observer(observation: UpstreamObservation)` is called at most once per response, after the body ends.
+  - `observer(observation: UpstreamObservation)` is called at most once per response, after the body ends (or as soon as the response is aborted, so TTFT / partial usage survive).
+  - `UpstreamObservation` carries `terminal` (upstream already reported a final result) and `upstreamError` (the upstream stream ended in an error).
 - `src/config.ts`: `stats: { enabled: boolean; retentionDays: number }` (defaults `true` / `30`), read via `getStatsConfig(config)`.
 - `GET /_llmwarp/status` keeps the existing `metrics` field and adds `stats: { enabled, retentionDays, aggregate | null }`.
 
@@ -55,9 +59,22 @@
 | `{provider}/{model}` | `false` | active provider / model | `overridden` |
 | illegal name, or no active provider | any | `null` / `null` | `unrouted` |
 
-- **Reliability**: `status === null` or `status >= 400` means `ok === false`. A client that disconnects before the response finishes is recorded as `status: null`, `ok: false` (an interruption is never a success).
+- **Reliability / termination**: every event carries `termination`, decided in `src/server.ts` `finalize()`:
+
+| Condition | `status` | `ok` | `termination` |
+|---|---|---|---|
+| Response finished, `statusCode < 400` | actual code | `true` | `completed` |
+| Response finished, `statusCode >= 400` | actual code | `false` | `completed` |
+| No finish, but the parser saw a terminal upstream event (`response.completed` / `[DONE]` / non-null `finish_reason`) | upstream status | `true` | `completed` |
+| No finish, upstream stream errored | `null` | `false` | `upstream_error` |
+| No finish, anything else (client disconnected) | `null` | `false` | `client_aborted` |
+
+  A response that ends with a terminal **error** signal (`parseResponseTerminal` -> `finishReason: "error"`, e.g. Responses `response.failed` delivered over HTTP 200) is recorded as `ok: false` even though it completed — it is a real failure, not a success.
+  A client that disconnects **after** the terminal event is recorded as a success; only a disconnect without any terminal event becomes `client_aborted`. Old rows without `termination` keep the legacy rule (`status === null` or `status >= 400` means `ok === false`); never guess a value for them.
 - **Degradation**: an upstream without a parsable `usage` yields `usage: null`; `ttftMs` is only set for SSE responses and only when a first chunk arrived. Never emit `NaN`; use `null` for "not collected".
-- **Denominators**: `unrouted` events never enter any provider's error-rate denominator; they are aggregated separately under `Aggregate.unrouted`.
+- **Responses API (`/v1/responses`)**: streaming `usage` lives in `response.usage` on the terminal event, and token details use `input_tokens_details.cached_tokens` / `output_tokens_details.reasoning_tokens`. Truncation is `incomplete_details.reason: "max_output_tokens" | "length"` (-> `finishReason: "length"`), content filtering is `"content_filter"`. `/v1/responses` never has `finish_reason`, so `parseFinishReason` alone is not enough for it.
+- **Aborts keep observations**: every exit path (`finish` from stream end, `res` close before finish, upstream stream error) must deliver the observation to the collector — `parser.finish` is idempotent, and the collector must be able to report `ttftMs` for a request the client cancelled.
+- **Denominators**: `unrouted` events never enter any provider's error-rate denominator; they are aggregated separately under `Aggregate.unrouted`. `client_aborted` events are counted in `aborted` and likewise excluded: `errorRate = errors / max(requests - aborted, 1)` (`errors` covers status >= 400 and `upstream_error`). The guard keeps the rate finite when `requests` is 0 or every request was cancelled.
 - **Transparency**: `/v1` response bytes, status codes, and SSE chunk order must be identical with and without collection.
 
 ### 4. Validation & Error Matrix
@@ -70,7 +87,11 @@
 | Non-stream response | `ttftMs: null` |
 | SSE response, no chunk ever received | `ttftMs: null` |
 | Response body larger than the capture cap (1 MB non-stream, 1 MB pending SSE line) | capture is dropped; request still recorded without usage |
-| Client aborts mid-stream | `status: null`, `ok: false`; no `usage` / `ttftMs` |
+| Client aborts mid-stream before any terminal event | `status: null`, `ok: false`, `termination: "client_aborted"`, counted in `aborted` (not in `errorRate`); `ttftMs` still recorded when a first chunk arrived |
+| Client disconnects after the terminal event | `ok: true`, `termination: "completed"`, upstream status kept |
+| Upstream SSE stream errors mid-flight | `status: null`, `ok: false`, `termination: "upstream_error"`, counts as an error |
+| Responses terminal `response.failed` over HTTP 200 | `status: 200`, `ok: false`, `finishReason: "error"` |
+| Responses event with `response.usage` | parsed like a top-level `usage`; `cached` / `reasoning` read from `input_tokens_details` / `output_tokens_details` |
 | Request-body read fails | recorded as `status: 400`, `ok: false` |
 | `stats.enabled = false` | no injection, no JSONL write, `stats.aggregate: null`; startup cleanup still runs, and the pre-existing in-memory `metrics` window still records |
 | `/_llmwarp/status` read/aggregate throws | `stats.aggregate: null`, HTTP 200 still returned |
@@ -90,7 +111,7 @@
 - `test/stats-aggregate.test.ts`: error rate, bucketed p50/p95 (assert the bucket edge, e.g. a lone 42 ms sample reports 50), token sums, `outputTokensPerSecond`, `unrouted` separation, and that `snapshot` drops days outside the retention window (accumulator does not grow unbounded).
 - `test/routing-stats.test.ts`: `warp`, `explicit`, `overridden`, `unrouted`, and `/v1/models` producing no event; `unrouted` excluded from provider denominators.
 - `test/proxy.test.ts`: SSE stays incremental — read with `res.body.getReader()` and assert the second chunk arrives **after** the first; `await res.text()` is not acceptable. Plus TTFT on first chunk, usage from the final chunk, and the no-usage fallback.
-- `test/server.test.ts`: status snapshot carries `stats`; client abort mid-stream records `ok: false` / `status: null`. Tests that assert on the persisted aggregate must reset `<CONFIG_DIR>/stats` first, because tests in one file share `CONFIG_DIR` and the JSONL record accumulates.
+- `test/server.test.ts`: status snapshot carries `stats`; client abort mid-stream records `ok: false` / `status: null` / `termination: "client_aborted"` and none of it lands in `errors`; a disconnect after a terminal event records `ok: true` / `termination: "completed"`; an upstream stream error records `termination: "upstream_error"` and counts as an error; a Responses `response.failed` terminal records `ok: false`. Tests that assert on the persisted aggregate must reset `<CONFIG_DIR>/stats` first, because tests in one file share `CONFIG_DIR` and the JSONL record accumulates.
 
 ### 7. Wrong vs Correct
 

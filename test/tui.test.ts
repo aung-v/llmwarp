@@ -732,6 +732,9 @@ test("统计页渲染按天火花线与 provider 切片，且不泄露密钥", (
   assert.match(output, /[\u2581-\u2588]/);
   assert.match(output, /最近 30 天/);
   assert.match(output, /汇总\s+请求 4/);
+  assert.match(output, /中断 0/);
+  assert.match(output, /TTFT/);
+  assert.match(output, /TTFT 平均 200ms/);
   assert.match(output, /ark\/glm-5\.3-flash/);
   assert.match(output, /chat\/completions/);
   assert.match(output, /全部/);
@@ -739,6 +742,39 @@ test("统计页渲染按天火花线与 provider 切片，且不泄露密钥", (
   assert.match(output, /路由失败/);
   assert.match(output, /未路由/);
   assert.doesNotMatch(output, /secret-key/);
+});
+
+test("统计页显示中断数并按目标渲染 TTFT 列（无样本显示 —）", () => {
+  const accumulator = new AggregateAccumulator();
+  const sample = sampleStatsEvents();
+  accumulator.add({ ...sample[0], termination: "completed" }); // 非流式，无 TTFT 样本
+  accumulator.add({
+    ...sample[1],
+    ok: false,
+    status: null,
+    termination: "client_aborted",
+    ttftMs: 120,
+    usage: null,
+    finishReason: null,
+  });
+  accumulator.add({ ...sample[2], termination: "completed" }); // 另一个目标，无 TTFT 样本
+  const aggregate = accumulator.snapshot(new Date(2026, 8, 27, 12, 0, 0).getTime(), 30);
+  const state = openPage(
+    createTuiState(buildCatalog(config), {
+      ...status,
+      stats: { enabled: true, retentionDays: 30, aggregate },
+    }),
+    "stats",
+  );
+  const output = renderTui(state, { height: 30, width: 90 });
+
+  assert.match(output, /中断 1/);
+  assert.match(output, /TTFT/);
+  assert.match(output, /120ms/);
+  assert.match(output, /—/);
+  for (const line of output.split("\n").filter((row) => /^[╭│╰]/.test(row))) {
+    assert.equal(visibleWidth(line), 90);
+  }
 });
 
 test("统计页 ↑↓ 切换 routeKind 过滤且不越界", () => {
@@ -836,4 +872,21 @@ test("parseStatusSnapshot 解析 stats 聚合与非法输入", () => {
 
   const missing = parseStatusSnapshot({ port: 8787, configPath: "/tmp/config.jsonc" });
   assert.equal(missing?.stats, null);
+});
+
+test("parseStatusSnapshot 兼容缺 aborted 的旧 daemon 聚合", () => {
+  const legacy = JSON.parse(JSON.stringify(statsStatus)) as {
+    stats: { aggregate: { overall: Record<string, unknown> } };
+  };
+  delete legacy.stats.aggregate.overall.aborted;
+
+  const parsed = parseStatusSnapshot(legacy);
+  assert.ok(parsed?.stats?.aggregate, "缺 aborted 不应让整段聚合失效");
+  assert.equal(parsed?.stats?.aggregate?.overall.aborted, 0);
+
+  // 存在但不是有限数时同样降级为 0，不影响其余字段
+  legacy.stats.aggregate.overall.aborted = "NaN";
+  const parsedInvalid = parseStatusSnapshot(legacy);
+  assert.ok(parsedInvalid?.stats?.aggregate);
+  assert.equal(parsedInvalid?.stats?.aggregate?.overall.aborted, 0);
 });

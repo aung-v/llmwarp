@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/usage-stats.md", "reason": "被修改的统计契约：事件 schema、聚合口径、代理观测"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "解析器必须 fail-soft，任何畸形上游响应都不能抛出或影响转发"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试与质量门槛"}
+{"file": ".trellis/spec/frontend/interaction-guidelines.md", "reason": "TUI 统计页的键位与渲染约定"}

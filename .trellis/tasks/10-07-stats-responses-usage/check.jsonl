@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/usage-stats.md", "reason": "核对最终实现与统计契约一致（含新 termination 判定表）"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "质量检查清单"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "TUI 展示层检查清单"}
