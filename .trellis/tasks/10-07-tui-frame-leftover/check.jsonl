@@ -1,2 +1,3 @@
 {"file": ".trellis/spec/frontend/interaction-guidelines.md", "reason": "验收点：帧矩形、窄终端不换行、文案不变"}
 {"file": ".trellis/spec/frontend/state-management.md", "reason": "确认没有把渲染修复做成状态/时序改动"}
+{"file": "test/tui.test.ts", "reason": "新增「整帧输出用绝对定位逐行覆盖，不含裸换行」回归"}

@@ -1,2 +1,4 @@
 {"file": ".trellis/spec/frontend/interaction-guidelines.md", "reason": "TUI 键位、帧内容与「每行必须等宽」这条新约束写在这里"}
 {"file": ".trellis/spec/frontend/state-management.md", "reason": "TUI 重绘/刷新时序：draw() 与 refresh() 的职责边界，别改时序"}
+{"file": "src/tui/render.ts", "reason": "frameToAnsi：绝对定位逐行写帧的新协议"}
+{"file": "src/tui/index.ts", "reason": "draw() 改用 frameToAnsi，并把帧高限制为 rows-1"}
