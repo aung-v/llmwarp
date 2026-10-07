@@ -1,0 +1,2 @@
+{"file": "src/tui/index.ts", "reason": "refresh 与动作的竞态与修复点"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "刷新/动作状态契约"}
