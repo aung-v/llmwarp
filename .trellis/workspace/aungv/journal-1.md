@@ -203,3 +203,25 @@ Follow-up to the stats feature, done outside a Trellis task at the user's reques
 ### Status
 
 [OK] **Completed**
+
+
+## Session 9: Correct Responses usage parsing, abort classification, and error rate
+<!-- trellis-session: v=2 fp=ea1d5532a7299ccb -->
+
+**Date**: 2026-10-07
+**Task**: Correct Responses usage parsing, abort classification, and error rate
+**Branch**: `master`
+
+### Summary
+
+统计口径修正：parseUsage 解包 response.usage、兼容 input/output_tokens_details；新增 parseResponseTerminal 解析 response.completed/incomplete/failed 与 length/content_filter；proxy close 路径补 parser.finish 使中断不再丢失 TTFT；终止方式区分 completed/client_aborted/upstream_error，客户端取消不进错误率分母（errorRate = errors / max(requests - aborted, 1)）；response.failed 记为错误；TUI 汇总行加「中断 N」、目标表加 TTFT 列、修 p95 列宽。版本号保持 1.1.0。真实上游冒烟通过，测试 150/150。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `628e41a` | fix(stats): correct Responses usage parsing, aborts, and error rate |
+
+### Status
+
+[OK] **Completed**
