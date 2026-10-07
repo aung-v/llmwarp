@@ -13,6 +13,7 @@ import {
   cancelConfirm,
   createTuiState,
   cycleStatsFilter,
+  finishSwitch,
   finishSuspended,
   focusNext,
   focusPrev,
@@ -726,6 +727,26 @@ const statsStatus: StatusSnapshot = {
   ...status,
   stats: { enabled: true, retentionDays: 30, aggregate: statsAggregate },
 };
+
+test("重启动作结束后必须清除「处理中」并留下成功事件", () => {
+  let state = createTuiState(buildCatalog(config), status);
+  const running = renderTui(state, { height: 30, width: 90 });
+  assert.doesNotMatch(running, /处理中/);
+
+  state = beginRestartConfirm({ ...state, focus: "daemon" });
+  assert.equal(state.confirming, "restart");
+  const inFlight = beginRestart(state);
+  assert.ok(inFlight, "确认态下应能进入重启在途状态");
+  assert.equal(inFlight.switching, true);
+  assert.match(renderTui(inFlight, { height: 30, width: 90 }), /处理中/);
+
+  // 动作结束：switching 必须清掉，结果要同时出现在反馈区和页脚。
+  const done = pushEvent(finishSwitch(inFlight, null), "ok", "已重启 daemon");
+  assert.equal(done.switching, false);
+  const finished = renderTui({ ...done, message: "已重启 daemon" }, { height: 30, width: 90 });
+  assert.doesNotMatch(finished, /处理中/);
+  assert.match(finished, /已重启 daemon/);
+});
 
 test("统计页渲染按天火花线与 provider 切片，且不泄露密钥", () => {
   const state = openPage(createTuiState(buildCatalog(config), statsStatus), "stats");

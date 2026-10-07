@@ -194,6 +194,9 @@ export async function startTui(): Promise<void> {
   const refresh = async (message: string | null = null): Promise<void> => {
     if (refreshing || stopped || state.switching) return;
     refreshing = true;
+    // 本次刷新的基准状态：等待期间用户发起动作（重启 / 切换 / 确认）都会替换 state。
+    // 那种情况下必须放弃写回，否则会把刚设置的 switching / 确认态覆盖回旧视图。
+    const base = state;
     debugLog("refresh", "begin", { message, page: state.page, focus: state.focus });
 
     try {
@@ -201,22 +204,25 @@ export async function startTui(): Promise<void> {
       debugLog("refresh", "daemonRunning", running ? { pid: running.pid, port: running.port } : { running: false });
       const status = running ? parseStatusSnapshot(await adminRequest("GET", "status")) : null;
       const { entries, useClientModel, providers } = await readCatalog(status);
+      if (state !== base) {
+        debugLog("refresh", "放弃写回：等待期间状态已被用户动作替换");
+        return;
+      }
       // 刷新会整体重建 state；纯视图状态从旧快照恢复。
-      const previousView = state;
-      const previousEntry = state.entries[state.selected];
+      const previousEntry = base.entries[base.selected];
       const previousSelected = previousEntry
         ? entries.findIndex(
             (entry) =>
               entry.provider === previousEntry.provider && entry.model === previousEntry.model,
           )
         : -1;
-      const previousPage = state.page;
-      const previousFocus = state.focus;
-      const previousRoutingSelected = state.routingSelected;
-      const previousProviderCursor = state.providerCursor;
-      const previousProviderSelected = state.providerSelected;
-      const previousConfirming = state.confirming;
-      const previousEvents = state.events;
+      const previousPage = base.page;
+      const previousFocus = base.focus;
+      const previousRoutingSelected = base.routingSelected;
+      const previousProviderCursor = base.providerCursor;
+      const previousProviderSelected = base.providerSelected;
+      const previousConfirming = base.confirming;
+      const previousEvents = base.events;
       state = createTuiState(entries, status, useClientModel, providers);
       // 右下角反馈区的内容不能被自动刷新清掉。
       state.events = previousEvents;
@@ -229,7 +235,7 @@ export async function startTui(): Promise<void> {
       state.providerCursor = Math.min(previousProviderCursor, Math.max(providers.length + 1, 0));
       state.providerSelected = Math.min(previousProviderSelected, Math.max(providers.length - 1, 0));
       // 统计页的过滤 / 指标 / 粒度 / 选中目标都是纯视图状态，自动刷新不能重置。
-      state = restoreStatsView(previousView, state);
+      state = restoreStatsView(base, state);
       if (previousConfirming === "switch") {
         state.confirming = state.entries[state.selected]?.selectable ? "switch" : null;
       } else if (previousConfirming === "routing" && previousPage === "routing") {
@@ -247,7 +253,8 @@ export async function startTui(): Promise<void> {
       debugLog("refresh", "end", { running: Boolean(running) });
     } catch (err) {
       debugLog("refresh", "error", { err: (err as Error).message });
-      state.message = (err as Error).message;
+      // 等待期间用户已经提交了更新的界面状态时，错误信息不能盖掉它。
+      if (state === base) state.message = (err as Error).message;
     } finally {
       refreshing = false;
       draw();
@@ -277,7 +284,9 @@ export async function startTui(): Promise<void> {
     try {
       await applyActiveSelection(entry.provider, entry.model);
       state = pushEvent(finishSwitch(state, null), "ok", `已切换到 ${entry.label}`);
-      await refresh(null);
+      // 先立刻重绘：结束「处理中」并让右下角结果马上可见，不依赖 refresh 是否被跳过。
+      draw();
+      await refresh(`已切换到 ${entry.label}`);
     } catch (err) {
       state = pushEvent(
         finishSwitch(state, null),
@@ -297,12 +306,14 @@ export async function startTui(): Promise<void> {
 
     try {
       await applyRoutingMode(nextValue);
+      const label = nextValue ? "已切换为按客户端请求" : "已切换为统一用当前模型";
       state = pushEvent(
         finishSwitch(state, null),
         "ok",
-        nextValue ? "已切换为按客户端请求" : "已切换为统一用当前模型",
+        label,
       );
-      await refresh(null);
+      draw();
+      await refresh(label);
     } catch (err) {
       // 写入可能已经落盘但 reload 失败：按配置文件回读，避免显示旧模式。
       let mode = state.useClientModel;
@@ -329,12 +340,15 @@ export async function startTui(): Promise<void> {
     try {
       const result = await restartDaemon();
       debugLog("restart", "完成", { result });
+      const label = result === "restarted" ? "已重启 daemon" : "已启动 daemon";
       state = pushEvent(
         finishSwitch(state, null),
         "ok",
-        result === "restarted" ? "已重启 daemon" : "已启动 daemon",
+        label,
       );
-      await refresh(null);
+      // 先立刻重绘：结束「处理中」并让右下角结果马上可见，不依赖 refresh 是否被跳过。
+      draw();
+      await refresh(label);
     } catch (err) {
       debugLog("restart", "失败", { err: (err as Error).message });
       state = pushEvent(
@@ -564,6 +578,8 @@ export async function startTui(): Promise<void> {
     resume();
     // finishSuspended 会清掉在途标志（删除路径置过 switching），漏清会把 TUI 卡住。
     state = finishSuspended(state, error ? "error" : "ok", error ? `${label}失败：\n${error}` : label);
+    // resume() 刚清过屏，必须先画一帧，避免 refresh 被跳过时界面全空。
+    draw();
     await refresh(null);
   };
 

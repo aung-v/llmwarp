@@ -55,6 +55,7 @@ Current persistent-TUI key map, kept in `src/tui/index.ts` and surfaced in the f
 - There is no key that restarts the daemon directly; the daemon panel button must be focused and confirmed.
 - While a confirmation is pending, only `Enter` and `Esc` act; `q`, `r`, and the arrow keys are ignored.
 - While an action is in flight (`state.switching`), every key except `Ctrl-C` is ignored and the interactive controls render disabled (dimmed).
+- 处理中 must end the moment the action resolves: the completion path clears `switching`, repaints immediately, and records the outcome (`已重启 daemon` / `已启动 daemon`, `已切换到 …`) in both the feedback panel and the footer. A background refresh must not clear the in-flight state, and must not swallow the completion repaint — otherwise the user cannot tell whether the restart succeeded.
 - Never render the daemon token or provider API keys; sanitize anything that comes from config or daemon state.
 
 ## Copy
