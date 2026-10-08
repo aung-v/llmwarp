@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "TUI 交互回归检查项"}
+{"file": ".trellis/spec/frontend/interaction-guidelines.md", "reason": "删除二次确认与键位核对"}

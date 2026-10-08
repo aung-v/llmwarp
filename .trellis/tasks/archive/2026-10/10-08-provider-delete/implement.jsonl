@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/frontend/interaction-guidelines.md", "reason": "供应商页交互、确认与反馈区约定"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "TUI 视图状态与刷新恢复规则"}
+{"file": ".trellis/spec/frontend/architecture.md", "reason": "新增确认意图与 begin*/confirm* 约定"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "挂起命令失败与终端恢复"}
