@@ -5,7 +5,7 @@
 只改一次客户端配置：Codex 等任意 OpenAI 兼容客户端指向本机的
 `http://127.0.0.1:<port>/v1`（端口可配，默认 `8787`），之后用 `llmwarp` 一键切换「用哪家、用哪个模型」。
 
-![llmwarp TUI](assets/llmwarp-tui.png)
+![llmwarp TUI](https://raw.githubusercontent.com/aung-v/llmwarp/master/assets/llmwarp-tui.png)
 
 ## 它解决什么问题
 
@@ -31,7 +31,14 @@ OpenAI 兼容客户端 ──▶ 127.0.0.1:<port>/v1 ──▶ llmwarp 守护进
 
 ## 安装
 
-需要 Node.js 20+。项目未发布到 npm，从源码构建：
+需要 Node.js 20+。
+
+```bash
+npm install -g llmwarp   # 全局安装，得到 llmwarp 命令
+npx llmwarp status       # 不想全局安装时，也可以用 npx 直接跑
+```
+
+从源码构建（开发用）：
 
 ```bash
 npm install
