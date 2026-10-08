@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 18
-- **Last Active**: 2026-10-07
+- **Total Sessions**: 19
+- **Last Active**: 2026-10-08
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~536 | Active |
+| `journal-1.md` | ~576 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 19 | 2026-10-08 | TUI 三个反馈修复：模式命名、供应商删除、统计时效性 | `a2d2d98`, `3d06f31` | `master` |
 | 18 | 2026-10-07 | TUI 整帧重绘改用绝对定位：根治导航栏叠层 | `48114cb`, `84f29f9` | `master` |
 | 17 | 2026-10-07 | TUI 重绘残留（二）：右下角落笔会滚屏 | `741da3d` | `master` |
 | 16 | 2026-10-07 | TUI 重绘残留：帧必须每行等宽且不超终端高度 | `224bad8`, `0439bb2` | `master` |

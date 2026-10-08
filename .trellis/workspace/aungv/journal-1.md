@@ -534,3 +534,43 @@ Follow-up to the stats feature, done outside a Trellis task at the user's reques
 ### Next Steps
 
 - 真机肉眼确认仍需人工做；width<72 的窄终端折行与 rows<13 布局是已知范围外限制
+
+
+## Session 19: TUI 三个反馈修复：模式命名、供应商删除、统计时效性
+<!-- trellis-session: v=2 fp=9df7b0834018ada9 -->
+
+**Date**: 2026-10-08
+**Task**: TUI 三个反馈修复：模式命名、供应商删除、统计时效性
+**Branch**: `master`
+
+### Summary
+
+处理三条 TUI 反馈：把「路由」页改名为「模式」并在页面上说明 warp / {provider}/{model} 的模型名语义；修复供应商页移动光标后删除总命中最后一个供应商的 bug（改为光标所在行的操作菜单）；统计页支持按窗口查看（最近10条/近1小时/今天/近7天/近30天），火花线改为固定近30天日 token 趋势并标注最小/最大/当前。README 与 .trellis/spec 同步。版本仍 1.1.0，未触发迭代。
+
+### Main Changes
+
+- 「路由」页 → 「模式」（导航/标题/确认/提示），页面内解释 warp（或留空）= 当前激活模型、{provider}/{model} = 指定供应商模型，以及两种模式的行为差异
+- 供应商页删除改由行内操作菜单（编辑/删除）触发，删除目标锁定当前高亮行，不再永远命中最后一个供应商；去掉固定删除行与 providerSelected
+- 统计页新增窗口选择器 h（5 个窗口），窗口只重算汇总与按 provider/model/endpoint 的目标表；近1小时按完成时间过滤，长请求不丢；旧 daemon 无 windows 时降级全期
+- 火花线与窗口解耦，固定渲染最近 30 天日 token 趋势并给出最小/最大/当前；移除统计页 Enter 单位切换，统计页保持只读
+- 同步 README 与 .trellis/spec（backend/usage-stats、frontend 交互/状态/架构）
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a2d2d98` | refactor(tui): 「模式」命名 + warp 说明；修复供应商删除命中最后一个 |
+| `3d06f31` | feat(tui): 统计页按窗口看数字，火花线固定近30天并给出数值 |
+
+### Testing
+
+- [OK] [OK] npm run typecheck / npm test（182 pass）/ npm run build 全绿（仓库无 lint 脚本）
+- [OK] [OK] 新增/更新单测覆盖窗口循环、旧 daemon 降级、空窗口未发出计数、按身份重定位选中目标、删除目标锁定
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 近1小时 与 最近10条 共用 500 条环形缓冲：若 1 小时内完成请求超过 500 条会低估，后续可按需提高容量或改为按时间裁剪
