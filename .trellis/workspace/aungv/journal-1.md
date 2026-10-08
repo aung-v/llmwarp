@@ -574,3 +574,43 @@ Follow-up to the stats feature, done outside a Trellis task at the user's reques
 ### Next Steps
 
 - 近1小时 与 最近10条 共用 500 条环形缓冲：若 1 小时内完成请求超过 500 条会低估，后续可按需提高容量或改为按时间裁剪
+
+
+## Session 20: 版本升到 1.2.0，VERSION 单一来源 package.json
+<!-- trellis-session: v=2 fp=5978165f9c0b13d3 -->
+
+**Date**: 2026-10-08
+**Task**: 版本升到 1.2.0，VERSION 单一来源 package.json
+**Branch**: `master`
+
+### Summary
+
+把 llmwarp 版本从 1.1.0 升到 1.2.0（承接统计窗口/火花线与三项 TUI 反馈修复的变更量），并消除 src/server.ts 手写 VERSION 与 package.json 双份维护的漂移风险：VERSION 改为运行时读取 ../package.json，tsx 直跑与 tsup 打包两条路径都成立；补回归测试把 VERSION 钉在仓库根 package.json 上。
+
+### Main Changes
+
+- package.json / package-lock.json: 1.1.0 -> 1.2.0（npm version --no-git-tag-version，未打 tag）
+- src/server.ts: 删除手写 VERSION 常量，改为 readFileSync(new URL("../package.json", import.meta.url)) 运行时读取；src/ 中不再有任何硬编码版本号
+- test/server.test.ts: /_llmwarp/status 用例断言 version 字段，并新增 VERSION 与仓库根 package.json 一致的回归测试（check 子代理补充）
+- .trellis/spec/backend/index.md: 记录「版本号只在 package.json 维护」的约定与回归测试位置
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b513f71` | chore(release): 版本升到 1.2.0，VERSION 改为单一来源 package.json |
+
+### Testing
+
+- [OK] [OK] npm run typecheck / npm test（183 pass）/ npm run build 全绿（仓库无 lint 脚本）
+- [OK] [OK] 源码 tsx 与构建产物 dist/cli.js 的 --version 都是 1.2.0；daemon.json 与 /_llmwarp/status 的 version 都是 1.2.0（临时 XDG 配置 + 非 8787 端口隔离验证）
+- [OK] [OK] npm pack -> 装进仓库外临时工程 -> node_modules/.bin/llmwarp --version = 1.2.0，证明包内 ../package.json 解析成立；临时件已清理
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- npm 发布改造（license/repository/engines/prepublishOnly/LICENSE/CI）仍是独立事项，未在本次范围内
+- 已知取舍：VERSION 在模块加载时读取，package.json 缺失/损坏会中断所有命令；npm 始终随包发布 package.json，故仅影响非常规布局

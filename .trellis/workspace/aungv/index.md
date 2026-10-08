@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 19
+- **Total Sessions**: 20
 - **Last Active**: 2026-10-08
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~576 | Active |
+| `journal-1.md` | ~616 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 20 | 2026-10-08 | 版本升到 1.2.0，VERSION 单一来源 package.json | `b513f71` | `master` |
 | 19 | 2026-10-08 | TUI 三个反馈修复：模式命名、供应商删除、统计时效性 | `a2d2d98`, `3d06f31` | `master` |
 | 18 | 2026-10-07 | TUI 整帧重绘改用绝对定位：根治导航栏叠层 | `48114cb`, `84f29f9` | `master` |
 | 17 | 2026-10-07 | TUI 重绘残留（二）：右下角落笔会滚屏 | `741da3d` | `master` |
