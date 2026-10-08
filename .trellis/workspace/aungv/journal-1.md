@@ -730,3 +730,41 @@ Follow-up to the stats feature, done outside a Trellis task at the user's reques
 ### Next Steps
 
 - 终端高度 <= 20 时反馈面板只剩 1 行内容，是守护进程面板固定 12 行的既有策略；若要改需单开任务
+
+
+## Session 24: 统计页表头回退 TTFT / tok/s（撤回我自己的过度改名）
+<!-- trellis-session: v=2 fp=ce37f63a1da20084 -->
+
+**Date**: 2026-10-08
+**Task**: 统计页表头回退 TTFT / tok/s（撤回我自己的过度改名）
+**Branch**: `master`
+
+### Summary
+
+用户指出表头 TTFT / tok/s 不该被改名。55d4e76 把那两个缩写换成中文全称是我自己多做的改动：缩写是标准术语，且 tok/s 自带单位，改名后表里只剩裸数字、单位被推到脚注。恢复表头缩写并同步总计块、README 与 spec。
+
+### Main Changes
+
+- 表头  /  恢复为  / ，数值列宽回到 6 / 7（数值列合计 30 列，含端点 47 列），labelWidth 常量同步 33->30 / 50->47（端点显示门槛仍是 width-50>=20，保持不变）
+- 当前统计范围总计块同步： -> ， -> ；口径 / 列义两行保留，列义改为解释缩写（TTFT = 首字延迟…；tok/s = 输出速度…）
+- 55d4e76 其余取舍不动：总耗时列仍不进表格、统计页仍无选中态、统计范围仍叫统计范围
+- 同步 README 与 .trellis/spec（backend/usage-stats 字段矩阵 + 列宽 + 测试要点、frontend/interaction-guidelines 列名）
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e6a52fb` | fix(tui): 统计页表头恢复 TTFT / tok/s，不再用中文全称 |
+
+### Testing
+
+- [OK] npm run typecheck / npm test（193 pass）/ npm run build 全绿；版本仍 1.2.0
+- [OK] 实机渲染 72 / 80 / 90 / 100 列：表头为 请求 错误率 TTFT tok/s，72 列隐藏端点列、80 列显示，行宽均等于终端宽不截断
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 教训：不要因为「更易懂」就改标准术语 / 缩写；用户只点了「平均」「窗口」不清楚，TTFT / tok/s 不在其中（已写入 spec 的「不要为了更好懂把表头换成中文全称」）
