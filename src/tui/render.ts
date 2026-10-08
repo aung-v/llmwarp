@@ -1,4 +1,4 @@
-import type { TuiPage, TuiState } from "./model.js";
+import type { TuiEvent, TuiPage, TuiState } from "./model.js";
 import {
   PROVIDER_ACTIONS,
   ROUTING_OPTIONS,
@@ -279,23 +279,61 @@ function shortTime(timestamp: string): string {
 /**
  * 右下角统一反馈区：上半部分是动作结果 / 状态事件（最新在上），
  * 下半部分是请求活动。成功与失败都在这里，且不会被自动刷新清掉。
+ *
+ * 面板可用内容行数（`height`）很小，所以按优先级分配而不是简单拼接：
+ * 指标块（有指标 3 行 / 无指标 4 行空态）永远优先；最新一条反馈保底 1 行、
+ * 空间够时 2 行；事件与指标之间的空行第一个被牺牲，之后才轮到旧反馈与最近请求。
+ * 旧反馈被整条丢弃是有意的：面板表达「最新状态」，不是完整日志。
  */
+const EVENT_LINE_CAP = 2;
+
+/** 单条反馈事件最多 `EVENT_LINE_CAP` 行；被行数截断时补 `…`，与「本来就短」区分开。 */
+function eventRows(event: TuiEvent, wrapWidth: number): string[] {
+  const mark =
+    event.kind === "ok" ? pc.green("✓") : event.kind === "error" ? pc.red("✗") : pc.dim("•");
+  const wrapped = wrapSanitized(event.text, wrapWidth);
+  const kept = wrapped.slice(0, EVENT_LINE_CAP);
+  if (wrapped.length > kept.length && kept.length > 0) {
+    kept[kept.length - 1] = `${kept[kept.length - 1]}…`;
+  }
+  return kept.map((line, index) =>
+    index === 0 ? `${mark} ${shortTime(event.time)} ${line}` : `   ${line}`,
+  );
+}
+
 function activityRows(state: TuiState, height: number, width: number): string[] {
   const innerWidth = Math.max(width - 4, 10);
-  const rows: string[] = [];
-
-  for (const event of state.events) {
-    const mark =
-      event.kind === "ok" ? pc.green("✓") : event.kind === "error" ? pc.red("✗") : pc.dim("•");
-    // 单条事件最多 4 行：一条超长错误不能把其他反馈和请求信息全部挤掉。
-    const lines = wrapSanitized(event.text, Math.max(innerWidth - 9, 8)).slice(0, 4);
-    lines.forEach((line, index) => {
-      rows.push(index === 0 ? `${mark} ${shortTime(event.time)} ${line}` : `   ${line}`);
-    });
-  }
-  if (state.events.length > 0) rows.push("");
-
+  const wrapWidth = Math.max(innerWidth - 9, 8);
   const metrics = state.status?.metrics;
+  const metricRows = metrics ? 3 : 4;
+  const hasEvents = state.events.length > 0;
+
+  // 指标块（3 行 / 空态 4 行）无条件优先；`sep` 是第一个被牺牲的。
+  const available = height - metricRows;
+  let sep = 0;
+  let eventBudget = 0;
+  if (hasEvents && available > 0) {
+    sep = available >= 2 ? 1 : 0;
+    const shared = available - sep;
+    // 有指标且有最近请求时，只要空间够「最新一条 2 行 + 一条最近请求 2 行」，
+    // 就把一块额度留给最近请求，避免旧反馈吃光共享空间。
+    const recentReserve = metrics && metrics.recent.length > 0 && shared >= 4 ? 2 : 0;
+    eventBudget = shared - recentReserve;
+  }
+
+  const rows: string[] = [];
+  let usedEventRows = 0;
+  for (const event of state.events) {
+    if (usedEventRows >= eventBudget) break;
+    const lines = eventRows(event, wrapWidth);
+    const take = Math.min(lines.length, eventBudget - usedEventRows);
+    for (let index = 0; index < take; index += 1) rows.push(lines[index]);
+    usedEventRows += take;
+    // 预算不足、只放下某条事件的一部分时，同样补 `…`。
+    if (take < lines.length) rows[rows.length - 1] = `${rows[rows.length - 1]}…`;
+  }
+  if (sep > 0) rows.push("");
+
   if (!metrics) {
     rows.push("暂无请求指标", pc.dim("重启 daemon 后启用"), "", pc.dim("只显示 /v1 请求，不含请求体"));
     return rows;
@@ -310,7 +348,8 @@ function activityRows(state: TuiState, height: number, width: number): string[] 
     `平均耗时 ${metrics.averageDurationMs}ms`,
     `本次运行 请求 ${formatCount(metrics.totalRequests)} · 错误 ${formatCount(metrics.totalErrors)}`,
   );
-  const entryLimit = Math.max(Math.floor((height - rows.length) / 2), 0);
+  const remaining = height - metricRows - sep - usedEventRows;
+  const entryLimit = Math.max(Math.floor(remaining / 2), 0);
   for (const request of metrics.recent.slice(0, entryLimit)) {
     rows.push(
       `${sanitize(request.method)} ${sanitize(request.path)}`,

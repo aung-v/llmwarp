@@ -1535,3 +1535,162 @@ test("统计页在 72 / 90 列与矮终端下保持矩形不越界", () => {
     }
   }
 });
+
+// —— 反馈 / 请求活动 面板的行预算：指标 > 最新反馈 > 旧反馈 / 最近请求 ——
+
+const feedbackStatus: StatusSnapshot = {
+  ...status,
+  metrics: {
+    totalRequests: 1234567,
+    totalErrors: 12345,
+    requestsLastMinute: 1234,
+    errorsLastMinute: 12,
+    requestsPerMinute: 1234,
+    averageDurationMs: 987,
+    recent: [
+      {
+        timestamp: "2026-09-27T12:34:56.000Z",
+        method: "POST",
+        path: "/v1/chat/completions",
+        provider: "ark",
+        model: "glm-5.3-flash",
+        status: 200,
+        durationMs: 120,
+        ok: true,
+      },
+      {
+        timestamp: "2026-09-27T12:34:57.000Z",
+        method: "POST",
+        path: "/v1/chat/completions",
+        provider: "ark",
+        model: "glm-5.3-flash",
+        status: 200,
+        durationMs: 121,
+        ok: true,
+      },
+      {
+        timestamp: "2026-09-27T12:34:58.000Z",
+        method: "POST",
+        path: "/v1/chat/completions",
+        provider: "ark",
+        model: "glm-5.3-flash",
+        status: 500,
+        durationMs: 122,
+        ok: false,
+      },
+    ],
+  },
+};
+
+/** 每条反馈用换行切成两行，模拟「4 条各占 ≥2 行」的瞬时反馈。索引 0 为最新。 */
+const longFeedback = [
+  "切换失败：上游返回 429\n令牌配额不足，请稍后重试或换供应商",
+  "启动 daemon 失败：端口 8787 被占用\n先停掉占用端口的进程再重试",
+  "供应商 ark 模型列表刷新失败\n网络超时，已保留原有列表",
+  "已重启 daemon：旧端口已释放\n新守护进程正在监听客户端请求",
+];
+
+/** 逆序 push，使 texts[0] 成为最新一条（pushEvent 把新事件放在最前）。 */
+function withFeedbackEvents(state: TuiState, texts: string[]): TuiState {
+  let next = state;
+  for (const text of [...texts].reverse()) next = pushEvent(next, "error", text);
+  return next;
+}
+
+function assertFrameFits(frame: string, width: number, height: number, label: string): void {
+  const lines = frame.split("\n");
+  assert.ok(lines.length <= height, `${label} 渲染 ${lines.length} 行 > ${height}`);
+  lines.forEach((line, index) => {
+    const expected = index === lines.length - 1 ? width - 1 : width;
+    assert.equal(visibleWidth(line), expected, `${label} 第 ${index} 行宽度不是 ${expected}`);
+  });
+}
+
+test("反馈面板：24 行下指标三行与最新反馈首行同时可见", () => {
+  const state = withFeedbackEvents(createTuiState(buildCatalog(config), feedbackStatus), longFeedback);
+  const frame = renderTui(state, { height: 24, width: 80 });
+
+  // 指标块无条件优先：三行全部可见。
+  assert.match(frame, /近60秒 请求 1\.2K · 错误 12/);
+  assert.match(frame, /平均耗时 987ms/);
+  assert.match(frame, /本次运行 请求 1\.2M · 错误 12\.3K/);
+  // 最新一条反馈保底 1 行；被行进预算截断时补 `…`。
+  assert.match(frame, /切换失败：上游返回 429…/);
+  assertFrameFits(frame, 80, 24, "24 行长反馈 + 指标");
+});
+
+test("反馈面板：30 行下保留至少一条最近请求，旧反馈可被丢弃", () => {
+  const state = withFeedbackEvents(createTuiState(buildCatalog(config), feedbackStatus), longFeedback);
+  const frame = renderTui(state, { height: 30, width: 80 });
+
+  assert.match(frame, /近60秒 请求 1\.2K · 错误 12/);
+  assert.match(frame, /平均耗时 987ms/);
+  assert.match(frame, /本次运行 请求 1\.2M · 错误 12\.3K/);
+  assert.match(frame, /POST \/v1\/chat\/completions/);
+  assert.match(frame, /200 120ms ark\/glm-5\.3-flash/);
+  // 面板表达「最新状态」，放不下的旧反馈整条丢弃。
+  assert.doesNotMatch(frame, /已重启 daemon：旧端口已释放/);
+  assertFrameFits(frame, 80, 30, "30 行长反馈 + 指标");
+});
+
+test("反馈面板：单条事件最多 2 行，截断补 …", () => {
+  const state = withFeedbackEvents(createTuiState(buildCatalog(config), status), [
+    "第1行\n第2行\n第3行\n第4行",
+  ]);
+  const frame = renderTui(state, { height: 30, width: 90 });
+
+  assert.match(frame, /第1行/);
+  assert.match(frame, /第2行…/);
+  assert.doesNotMatch(frame, /第3行|第4行/);
+  assertFrameFits(frame, 90, 30, "单条长事件");
+
+  // 本来就放得下的事件不得被加上 `…`：截断必须与「内容本来就短」可区分。
+  const shortFrame = renderTui(
+    withFeedbackEvents(createTuiState(buildCatalog(config), status), ["短的一条反馈"]),
+    { height: 30, width: 90 },
+  );
+  const shortLine = shortFrame.split("\n").find((line) => line.includes("短的一条反馈")) ?? "";
+  assert.ok(shortLine.length > 0, "短事件应完整可见");
+  assert.doesNotMatch(shortLine, /…/);
+});
+
+test("反馈面板：无事件时内容与顺序不变，指标上方不留空行", () => {
+  const frame = renderTui(createTuiState(buildCatalog(config), feedbackStatus), {
+    height: 24,
+    width: 80,
+  });
+  const lines = frame.split("\n");
+  const titleIndex = lines.findIndex((line) => line.includes("反馈 / 请求活动"));
+  assert.ok(titleIndex >= 0, "反馈面板标题应存在");
+  // 面板标题下一行直接是指标首行，而不是被牺牲掉的分隔空行。
+  assert.match(lines[titleIndex + 1] ?? "", /近60秒 请求 1\.2K · 错误 12/);
+  assert.match(frame, /POST \/v1\/chat\/completions/);
+  assertFrameFits(frame, 80, 24, "无事件 + 指标");
+});
+
+test("反馈面板：无指标空态不被事件挤没，帧不超高度", () => {
+  const state = withFeedbackEvents(createTuiState(buildCatalog(config), { ...status, metrics: null }), [
+    "上线成功\n监听 8787",
+  ]);
+
+  const frame = renderTui(state, { height: 30, width: 80 });
+  assert.match(frame, /上线成功/);
+  assert.match(frame, /暂无请求指标/);
+  assert.match(frame, /重启 daemon 后启用/);
+  assert.match(frame, /只显示 \/v1 请求，不含请求体/);
+  assertFrameFits(frame, 80, 30, "无指标空态 + 事件");
+
+  // 极矮反馈面板（内容 1 行）：空态首行仍在，事件整体让位。
+  const tiny = renderTui(state, { height: 20, width: 80 });
+  assert.match(tiny, /暂无请求指标/);
+  assertFrameFits(tiny, 80, 20, "无指标空态 tiny");
+});
+
+test("反馈面板：最长反馈 + 最大计数下帧不变量仍成立", () => {
+  const state = withFeedbackEvents(createTuiState(buildCatalog(config), feedbackStatus), longFeedback);
+  for (const width of [72, 80, 90, 100]) {
+    for (const height of [12, 16, 20, 24, 30, 34]) {
+      assertFrameFits(renderTui(state, { height, width }), width, height, `长反馈 ${height}x${width}`);
+    }
+  }
+});
