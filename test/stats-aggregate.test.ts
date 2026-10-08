@@ -1,7 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { AggregateAccumulator, histogramPercentile } from "../src/stats/aggregate.js";
+import {
+  AggregateAccumulator,
+  STATS_WINDOWS,
+  aggregateEvents,
+  histogramPercentile,
+} from "../src/stats/aggregate.js";
+import { RecentBuffer, STATS_RECENT_CAPACITY } from "../src/stats/recent.js";
 import type { RequestEvent } from "../src/stats/event.js";
 
 const NOW = new Date(2026, 8, 27, 12, 0, 0).getTime();
@@ -277,4 +283,88 @@ test("AggregateMetrics 字段与 usage-stats 出口矩阵一一对应", () => {
     [...codeFields].sort(),
     "新增/删除指标字段必须同步更新 usage-stats.md 的出口矩阵",
   );
+});
+
+test("aggregateEvents 口径与全期一致：unrouted 单独计数、不进 overall / targets", () => {
+  const result = aggregateEvents([
+    event({}),
+    event({ routeKind: "unrouted", provider: null, model: null, ok: false, status: 400, usage: null }),
+  ]);
+  assert.equal(result.overall.requests, 1);
+  assert.equal(result.targets.length, 1);
+  assert.equal(result.targets[0].requests, 1);
+  assert.equal(result.unrouted.requests, 1);
+  assert.equal(result.unrouted.errors, 1);
+});
+
+test("RecentBuffer 容量上限 500 且按加入顺序保留最新事件", () => {
+  const buffer = new RecentBuffer();
+  const base = NOW;
+  for (let index = 0; index < STATS_RECENT_CAPACITY + 5; index += 1) {
+    buffer.add(event({ ts: base + index }));
+  }
+  const events = buffer.events();
+  assert.equal(events.length, STATS_RECENT_CAPACITY);
+  assert.equal(events[0].ts, base + 5);
+  assert.equal(events[events.length - 1].ts, base + STATS_RECENT_CAPACITY + 4);
+  // 返回副本：外部改动不影响缓冲。
+  events.pop();
+  assert.equal(buffer.events().length, STATS_RECENT_CAPACITY);
+});
+
+test("snapshot 返回 5 个窗口，recent10 取缓冲末尾 10 条", () => {
+  const accumulator = new AggregateAccumulator();
+  const buffer: RequestEvent[] = [];
+  for (let index = 0; index < 12; index += 1) {
+    const item = event({ ts: NOW - (11 - index) * 1000, durationMs: 10 });
+    accumulator.add(item);
+    buffer.push(item);
+  }
+  const result = accumulator.snapshot(NOW, 30, buffer);
+  assert.deepEqual(
+    result.windows.map((window) => window.id),
+    STATS_WINDOWS.map((window) => window.id),
+  );
+  assert.equal(result.windows.find((window) => window.id === "recent10")?.overall.requests, 10);
+  assert.equal(result.windows.find((window) => window.id === "hour1")?.overall.requests, 12);
+  assert.equal(result.windows.find((window) => window.id === "today")?.overall.requests, 12);
+});
+
+test("hour1 按完成时刻过滤：超过 1 小时的长请求在完成时计入", () => {
+  const accumulator = new AggregateAccumulator();
+  // 开始于 2 小时前、耗时 2.5 小时 → 完成于 30 分钟前，应计入近 1 小时。
+  const long = event({ ts: NOW - 2 * 3_600_000, durationMs: 2.5 * 3_600_000 });
+  // 开始并完成于 3 小时前 → 已出窗。
+  const old = event({ ts: NOW - 3 * 3_600_000, durationMs: 1000 });
+  for (const item of [old, long]) accumulator.add(item);
+  const result = accumulator.snapshot(NOW, 30, [old, long]);
+  assert.equal(result.windows.find((window) => window.id === "hour1")?.overall.requests, 1);
+  assert.equal(result.windows.find((window) => window.id === "recent10")?.overall.requests, 2, "recent10 不按时间过滤");
+});
+
+test("上游行天桶按 今天 / 近7天 / 近30天 窗口合并，保留期外的天不计", () => {
+  const today = new Date(2026, 8, 27, 9, 0, 0).getTime();
+  const week = new Date(2026, 8, 23, 9, 0, 0).getTime();
+  const month = new Date(2026, 8, 2, 9, 0, 0).getTime();
+  const older = new Date(2026, 7, 1, 9, 0, 0).getTime(); // 2026-08-01，超出 30 天
+  const accumulator = new AggregateAccumulator();
+  for (const ts of [today, week, month, older]) accumulator.add(event({ ts }));
+  const result = accumulator.snapshot(new Date(2026, 8, 27, 12, 0, 0).getTime(), 30);
+
+  const window = (id: string) => result.windows.find((item) => item.id === id)!;
+  assert.equal(window("today").targets[0]?.requests, 1);
+  assert.equal(window("week7").targets[0]?.requests, 2);
+  assert.equal(window("month30").targets[0]?.requests, 3);
+  assert.equal(result.targets[0]?.requests, 3, "全期目标只含保留期内的天");
+  assert.equal(result.windows.find((item) => item.id === "recent10")?.overall.requests, 0, "无原始事件时条数窗口为空");
+});
+
+test("空窗口返回全 0 而不是省略", () => {
+  const result = snapshotOf([]);
+  assert.equal(result.windows.length, STATS_WINDOWS.length);
+  for (const window of result.windows) {
+    assert.equal(window.overall.requests, 0);
+    assert.deepEqual(window.targets, []);
+    assert.equal(window.unrouted.requests, 0);
+  }
 });

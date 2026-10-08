@@ -4,6 +4,8 @@ import { mkdtempSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendEvent, dayKey, hourKey, prune, readRange } from "../src/stats/store.js";
+import { StatsCollector } from "../src/stats/collect.js";
+import { STATS_RECENT_CAPACITY } from "../src/stats/recent.js";
 import type { RequestEvent } from "../src/stats/event.js";
 
 function event(ts: number, overrides: Partial<RequestEvent> = {}): RequestEvent {
@@ -96,4 +98,33 @@ test("prune 删除保留期外的按天文件并保留近期文件", () => {
     [`${dayKey(today)}.jsonl`, `${dayKey(recent)}.jsonl`].sort(),
   );
   assert.equal(readRange(30, dir, now).length, 2);
+});
+
+test("collector.record 同时进累加器与环形缓冲，重启回灌也进缓冲", () => {
+  const dir = mkdtempSync(join(tmpdir(), "llmwarp-collect-"));
+  const at = new Date(2026, 8, 27, 12, 0, 0).getTime();
+  const collector = new StatsCollector({ enabled: true, retentionDays: 30, dir, now: () => at });
+  collector.record(event(at - 1000));
+  const aggregate = collector.aggregate;
+  assert.equal(aggregate.overall.requests, 1);
+  assert.equal(aggregate.windows.find((window) => window.id === "recent10")?.overall.requests, 1);
+  assert.equal(aggregate.windows.find((window) => window.id === "hour1")?.overall.requests, 1);
+
+  // 新进程（同目录）回灌落盘历史：recent10 / hour1 仍有数据。
+  const reloaded = new StatsCollector({ enabled: true, retentionDays: 30, dir, now: () => at });
+  const seeded = reloaded.aggregate;
+  assert.equal(seeded.windows.find((window) => window.id === "recent10")?.overall.requests, 1);
+  assert.equal(seeded.windows.find((window) => window.id === "hour1")?.overall.requests, 1);
+});
+
+test("环形缓冲容量上限：record 超过 500 条后只保留最近 500", () => {
+  const dir = mkdtempSync(join(tmpdir(), "llmwarp-collect-"));
+  const at = new Date(2026, 8, 27, 12, 0, 0).getTime();
+  const collector = new StatsCollector({ enabled: true, retentionDays: 30, dir, now: () => at });
+  const total = STATS_RECENT_CAPACITY + 20;
+  for (let index = 0; index < total; index += 1) collector.record(event(at - 1000));
+  const aggregate = collector.aggregate;
+  assert.equal(aggregate.overall.requests, total, "全期累加器不受缓冲容量影响");
+  assert.equal(aggregate.windows.find((window) => window.id === "hour1")?.overall.requests, STATS_RECENT_CAPACITY);
+  assert.equal(aggregate.windows.find((window) => window.id === "recent10")?.overall.requests, 10);
 });

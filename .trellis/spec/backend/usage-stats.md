@@ -31,8 +31,17 @@
 - `src/stats/collect.ts`
   - `new StatsCollector({ enabled, retentionDays, dir?, now? })`
   - `isEnabled: boolean`, `retention: number`, `aggregate: Aggregate`, `record(event): void`, `pruneNow(at?): string[]`, `configure({ enabled, retentionDays }): void`
+  - `record()` writes the event to the JSONL append **and** the in-memory accumulator **and** the `RecentBuffer` (only when the append succeeds); `seed()` (once) feeds both the accumulator and the buffer.
+- `src/stats/recent.ts`
+  - `STATS_RECENT_CAPACITY = 500`
+  - `new RecentBuffer()`, `.add(event): void` (overwrites the oldest past capacity), `.events(): RequestEvent[]` (ascending-by-completion copy)
+  - `completionTime(event): number` = `ts + durationMs`
 - `src/stats/aggregate.ts`
-  - `new AggregateAccumulator()`, `.add(event): void`, `.snapshot(now?, retentionDays?): Aggregate` -> `{ overall, days, hours, targets, unrouted }`, `.trackedDays: number`
+  - `new AggregateAccumulator()`, `.add(event): void`, `.snapshot(now?, retentionDays?, recent?): Aggregate` -> `{ overall, days, hours, targets, unrouted, windows }`, `.trackedDays: number`
+  - `aggregateEvents(events): { overall, targets, unrouted }` — reusable window aggregation over raw events, identical口径 to the full aggregate (unrouted separate)
+  - `type StatsWindowId = "recent10" | "hour1" | "today" | "week7" | "month30"`
+  - `STATS_WINDOWS: readonly { id; label; kind: "recent" | "time" }[]` — fixed order, also the `h` cycle order
+  - `interface StatsWindow { id; label; kind; overall; targets; unrouted }`
   - `AggregateMetrics` carries `aborted` (client-cancelled requests) next to `errors` / `errorRate`
   - `histogramPercentile(hist: Uint32Array, total: number, p: number): number`
   - `LATENCY_BOUNDS: readonly number[]` (ms bucket upper edges)
@@ -41,13 +50,18 @@
   - `observer(observation: UpstreamObservation)` is called at most once per response, after the body ends (or as soon as the response is aborted, so TTFT / partial usage survive).
   - `UpstreamObservation` carries `terminal` (upstream already reported a final result) and `upstreamError` (the upstream stream ended in an error).
 - `src/config.ts`: `stats: { enabled: boolean; retentionDays: number }` (defaults `true` / `30`), read via `getStatsConfig(config)`.
-- `GET /_llmwarp/status` keeps the existing `metrics` field and adds `stats: { enabled, retentionDays, aggregate | null }`.
+- `GET /_llmwarp/status` keeps the existing `metrics` field and adds `stats: { enabled, retentionDays, aggregate | null }`; `aggregate` now also carries `windows: StatsWindow[]`.
 
 ### 3. Contracts
 
 - **Storage**: one file per local day at `<CONFIG_DIR>/stats/YYYY-MM-DD.jsonl`, one `RequestEvent` per line. Directory `0o700`, files `0o600`. `appendEvent` returns `false` on any failure and never throws; a write failure must not change the request path.
 - **Retention**: `prune(retentionDays)` deletes whole day files outside the retention window. `pruneNow()` is called **exactly once, at daemon startup**, and runs regardless of `stats.enabled`; there is no hourly timer and no request-triggered cleanup.
 - **No periodic work**: the runtime must not scan or read the stats directory on a schedule. History is loaded from JSONL at most once per process (lazily, on the first `record`/`aggregate` when enabled) and fed into `AggregateAccumulator`. Per request the collector only appends one line and updates in-memory buckets; `/_llmwarp/status` is a pure in-memory snapshot.
+- **Time windows (`Aggregate.windows`)**: `snapshot()` always returns exactly the 5 `STATS_WINDOWS` entries in order, even when empty (`overall` all-zero, `targets: []`). The TUI window selector only changes the numbers (summary + upstream table); the sparkline is decoupled and always shows the last 30 days. Window口径:
+  - `recent10` / `hour1` come from the `RecentBuffer` passed into `snapshot(now, retentionDays, recent)`; `recent10` keeps the last 10 **completed** events (**no** time filter, so a long request is never dropped), `hour1` filters by **completion time** `ts + durationMs >= now - 1h`.
+  - `today` / `week7` / `month30` merge the per-target **day buckets** for the window's natural-day keys (`recentDayKeys`); a target's full-period bucket is itself the merge of its retained day buckets, so window口径 and full-period口径 are identical.
+  - `unrouted` is still counted separately and never enters a window's `overall` / `targets` (`overall.requests == sum(targets.requests)` holds per window). The TUI renders the windowed `unrouted.requests` in the 命中 line, so 命中 / 未发出 stay on the same window.
+- **Backward compatible payload**: `windows` is a new field. An old daemon omits it (TUI falls back to full-period numbers and says so); an old TUI ignores it. `parseAggregate` maps missing / non-array `windows` to `[]` and skips individual malformed entries rather than failing the whole aggregate.
 - **Percentiles are bucketed**: `p50DurationMs` / `p95DurationMs` / `p95TtftMs` come from a fixed-boundary histogram and report the bucket's **upper edge** ("≤ N ms"), not an exact sample. Averages (`avgDurationMs`, `avgTtftMs`) stay exact because the running sum is kept.
 - **Latency excludes cancellations**: `avgDurationMs` / `p50DurationMs` / `p95DurationMs` are computed over `timed` (requests that were not `client_aborted`), because an aborted request's `durationMs` is a truncated fragment, not service time. `requests` and `aborted` still count it, so `timed + aborted == requests` holds at every level; never use `requests` as the histogram total. Legacy rows without `termination` are treated as non-cancelled and land in `timed`.
 - **Throughput needs a measurable decode window**: `outputTokensPerSecond` only accumulates samples where `ttftMs !== null` (stream, first chunk seen) and the request was not cancelled, with `generation = durationMs - ttftMs`. A non-streaming response has no TTFT, so prefill and decode cannot be separated and it contributes **no** sample; when nothing qualifies, the value is `null` (rendered `—`). Never fall back to `durationMs` as the decode window — that silently mixes end-to-end and decode-phase throughput.
@@ -109,7 +123,7 @@ provider + model + endpoint）/ `unrouted`（从未到达上游）。除 `unrout
 | `ttftSamples` | overall, days, hours, targets, unrouted | 选中详情「延迟」样本数；为 0 时上面两个 TTFT 出口显示 `—` |
 | `inputTokens` | overall, days, hours, targets, unrouted | 汇总行 token 行「输入」；选中详情「token」 |
 | `outputTokens` | overall, days, hours, targets, unrouted | 汇总行 token 行「输出」；选中详情「token」 |
-| `totalTokens` | overall, days, hours, targets, unrouted | 火花线（`tokens` 指标）；选中详情「token」总 |
+| `totalTokens` | overall, days, hours, targets, unrouted | 火花线（固定 `Token(近30天)`，标 `最小 / 最大 / 当前`）；选中详情「token」总 |
 | `cachedTokens` | overall, days, hours, targets, unrouted | 汇总行 token 行「缓存」；选中详情「token」 |
 | `reasoningTokens` | overall, days, hours, targets, unrouted | 汇总行 token 行「推理」；选中详情「token」 |
 | `outputTokensPerSecond` | overall, days, hours, targets, unrouted | 汇总行「输出 … tok/s」；目标表格「tok/s」列；选中详情「吞吐」 |
@@ -121,8 +135,15 @@ provider + model + endpoint）/ `unrouted`（从未到达上游）。除 `unrout
 
 **出口规则**：
 
-- 汇总行只展示 `overall`；目标表格 + 选中详情展示 `targets` 中当前选中的那一个；火花线按
-  `days`（按天）或 `hours`（按小时，取最近 24 个活跃小时，稀疏桶不补零）切换。
+- 汇总行只展示**当前窗口**的 `overall`；目标表格 + 选中详情展示**当前窗口** `targets`
+  中当前选中的那一个。当前窗口由 TUI 的 `statsWindow`（`STATS_WINDOWS` 顺序，`h` 循环）决定，
+  daemon 端对应 `Aggregate.windows[id]`。汇总行上方固定一行 `窗口 {label} · 已完成请求 · 进行中不计`。
+- 火花线与窗口**解耦**、固定不变：`Token(近30天) ▁▂▃ …  最小 {min} · 最大 {max} · 当前 {last}`，
+  数据取 `days` 末尾 30 天（`totalTokens`），`days` 为空时显示 `—`。窗口内无已完成请求时，
+  数字区显示「窗口内暂无已完成请求」；此时若窗口内仍有未发出请求，追加 ` · 未发出 N`
+  （未发出单独计数、不进 `overall`，所以空窗口不等于「窗口内什么都没发生」）。`近30天`
+  的右边界仍受 `stats.retentionDays` 约束，过期文件在 daemon 启动时被清理。旧 daemon 无
+  `windows` 时回退全期并提示「窗口 全期（daemon 未提供窗口数据）」。
 - 目标表格的列固定为 `供应商 / 模型 · [端点] · 请求 · 错误率 · 平均 · TTFT · tok/s`（`[端点]` 为条件列，见下）：
   这里只放「一眼比较上游」需要的量。`p50` / `p95` / 分位类指标不进表格，只在汇总行（overall 的
   95 分位）与选中详情里出现。`routeKind` 不是维度，因此没有「路由」列，也没有按 routeKind
@@ -184,7 +205,7 @@ provider + model + endpoint）/ `unrouted`（从未到达上游）。除 `unrout
 - `test/stats-aggregate.test.ts`: grouping is `provider` + `model` + `endpoint` — two events that differ only by `routeKind` (`warp` + `overridden`) collapse into one target with summed counters; `unrouted` events never appear in `targets`; the `AggregateMetrics` field set equals the `aggregate-metrics-matrix` rows in this document (adding a metric without a matrix row and an outlet fails the build); cancelled (`client_aborted`) requests stay out of `avgDurationMs` / `p50` / `p95` while still counting toward `requests` / `aborted`; non-streaming requests produce no `outputTokensPerSecond` sample and an all-non-stream aggregate reports `null`; error rate, bucketed p50/p95 (assert the bucket edge, e.g. a lone 42 ms sample reports 50), token sums, `outputTokensPerSecond`, `unrouted` separation (routing failures never appear in `targets` / `days` / `hours`, and `overall.requests + unrouted.requests` equals the total), and that `snapshot` drops days outside the retention window (accumulator does not grow unbounded).
 - `test/routing-stats.test.ts`: `warp`, `explicit`, `overridden`, `unrouted`, and `/v1/models` producing no event; routeKinds are still recorded on the events (audit) but merge into a single target per upstream identity; `unrouted` excluded from every upstream view (no `unrouted` target exists at all) while `Aggregate.unrouted` still counts it, plus the two invariants above.
 - `test/proxy.test.ts`: SSE stays incremental — read with `res.body.getReader()` and assert the second chunk arrives **after** the first; `await res.text()` is not acceptable. Plus TTFT on first chunk, usage from the final chunk, and the no-usage fallback.
-- `test/tui.test.ts`: there is no filter row and no `路由` column any more; the 命中 line still prints `未发出 N` (the label is 「未发出」, not 「未路由」, because the bucket also holds local errors such as an unreadable body or a missing API key); `↑`/`↓` moves the selected target row and stays in range (`h` toggles the sparkline granularity); the `端点` column hides when every visible row shares one endpoint and appears when they differ; the selected-target detail panel prints every `AggregateMetrics` field (`50分位` / `95分位` / `TTFT 95分位` / stream / non-stream / total tokens included) and follows the selected row; the table carries a `tok/s` column and no longer carries `p95`; `formatCount()` folds counts and token sums into `K` / `M` / `G` (`999 → 999`, `1000 → 1K`, `31575899 → 31.6M`) while milliseconds and percentages stay raw; the hour sparkline consumes `aggregate.hours` and `restoreStatsView` keeps `statsMetric` / `statsRange` / `statsSelected` across a refresh, re-locating the selected target by `provider/model/endpoint` instead of by index; a legacy payload whose `targets` still carry `routeKind` parses and renders without error.
+- `test/tui.test.ts`: there is no filter row and no `路由` column any more; the 命中 line still prints `未发出 N` (the label is 「未发出」, not 「未路由」, because the bucket also holds local errors such as an unreadable body or a missing API key); `↑`/`↓` moves the selected target row and stays in range (`h` cycles the five `STATS_WINDOWS`: `最近10条` / `近1小时` / `今天` / `近7天` / `近30天`, re-scoping the summary and the target table only, and a window with no completed request still prints its `未发出 N` count when non-zero); the `端点` column hides when every visible row shares one endpoint and appears when they differ; the selected-target detail panel prints every `AggregateMetrics` field (`50分位` / `95分位` / `TTFT 95分位` / stream / non-stream / total tokens included) and follows the selected row; the table carries a `tok/s` column and no longer carries `p95`; `formatCount()` folds counts and token sums into `K` / `M` / `G` (`999 → 999`, `1000 → 1K`, `31575899 → 31.6M`) while milliseconds and percentages stay raw; the sparkline is decoupled from the window and always renders the last 30 days of `aggregate.days` (`totalTokens`) with explicit `最小` / `最大` / `当前` values, and `restoreStatsView` keeps `statsWindow` / `statsSelected` across a refresh, re-locating the selected target by `provider/model/endpoint` instead of by index; a legacy payload whose `targets` still carry `routeKind` parses and renders without error.
 - `test/server.test.ts`: status snapshot carries `stats`; client abort mid-stream records `ok: false` / `status: null` / `termination: "client_aborted"` and none of it lands in `errors`; a disconnect after a terminal event records `ok: true` / `termination: "completed"`; an upstream stream error records `termination: "upstream_error"` and counts as an error; a Responses `response.failed` terminal records `ok: false`. Tests that assert on the persisted aggregate must reset `<CONFIG_DIR>/stats` first, because tests in one file share `CONFIG_DIR` and the JSONL record accumulates.
 
 ### 7. Wrong vs Correct

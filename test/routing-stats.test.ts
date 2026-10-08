@@ -130,6 +130,20 @@ interface StatsPayload {
         requests: number;
         errors: number;
       }[];
+      windows: {
+        id: string;
+        label: string;
+        kind: string;
+        overall: { requests: number; errors: number; errorRate: number };
+        unrouted: { requests: number; errors: number };
+        targets: {
+          provider: string | null;
+          model: string | null;
+          endpoint: string;
+          requests: number;
+          errors: number;
+        }[];
+      }[];
     } | null;
   };
 }
@@ -250,6 +264,19 @@ test("统计按解析后的真实上游归属，unrouted 不进供应商错误�
   assert.equal(fallbackTarget?.requests, 1);
   // 路由失败不产生目标分组：targets 里既没有 unrouted，也没有 provider=null 的行。
   assert.equal(aggregatePayload.targets.every((target) => target.provider !== null), true);
+
+  // status 载荷新增 windows：5 个固定顺序的窗口；最近10条覆盖全部 6 条，口径与全期一致。
+  assert.deepEqual(
+    aggregatePayload.windows.map((window) => window.id),
+    ["recent10", "hour1", "today", "week7", "month30"],
+  );
+  const recentWindow = aggregatePayload.windows[0];
+  assert.equal(recentWindow.label, "最近10条");
+  assert.equal(recentWindow.overall.requests + recentWindow.unrouted.requests, 6);
+  assert.equal(
+    recentWindow.targets.reduce((sum, target) => sum + target.requests, 0),
+    recentWindow.overall.requests,
+  );
 
   // 上游请求体：include_usage 仅在流式 chat/completions 注入；overridden 落到 alpha 且改写模型
   assert.equal(alpha.requests.length, 4);

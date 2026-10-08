@@ -6,7 +6,7 @@ import {
   selectedProvider,
   selectedRouting,
   selectedStatsIndex,
-  statsTargets,
+  statsWindowData,
 } from "./model.js";
 import type { TargetAggregate } from "../stats/aggregate.js";
 import pc from "picocolors";
@@ -389,7 +389,7 @@ function statsDetailRows(target: TargetAggregate | null): string[] {
   ];
 }
 
-/** 统计页主体：火花线（天/小时）+ 按上游目标的切片表 + 选中目标详情；数据来自 status.stats。 */
+/** 统计页主体：固定最近 30 天 token 火花线 + 选中窗口的汇总 / 上游目标表 + 选中详情。 */
 function statsRows(state: TuiState, height: number, width: number): string[] {
   const snapshot = state.status?.stats;
   if (!state.status) {
@@ -410,23 +410,49 @@ function statsRows(state: TuiState, height: number, width: number): string[] {
   if (!aggregate) {
     return ["暂无法读取统计", pc.dim("历史文件读取失败或 daemon 未返回聚合结果")];
   }
+  const view = statsWindowData(state);
+  if (!view) {
+    return ["暂无法读取统计", pc.dim("历史文件读取失败或 daemon 未返回聚合结果")];
+  }
 
   const rows: string[] = [];
-  const metric = state.statsMetric;
-  const overall = aggregate.overall;
-  const days = aggregate.days;
-  // hours 是稀疏的（只含真正有请求的小时），所以按「最近 24 个活跃小时」标注，不假造空桶。
-  const series = state.statsRange === "hour" ? aggregate.hours.slice(-24) : days;
-  const values = series.map((point) => (metric === "tokens" ? point.totalTokens : point.requests));
-  const spark = sparkline(values);
-  const rangeLabel =
-    state.statsRange === "hour"
-      ? `火花线 按小时（最近 ${series.length} 个活跃小时）`
-      : "火花线 按天";
 
+  // 窗口说明行：窗口只作用于下面的数字；旧 daemon 无 windows 时退回全期并给出提示。
   rows.push(
-    pc.dim(`区间  最近 ${snapshot.retentionDays} 天 · ${days.length} 天有数据 · ${rangeLabel}`),
-    `${metric === "tokens" ? "Token" : "请求"} ${spark || "—"}`,
+    view.window
+      ? pc.dim(`窗口 ${view.window.label} · 已完成请求 · 进行中不计`)
+      : pc.dim("窗口 全期（daemon 未提供窗口数据）· 已完成请求 · 进行中不计"),
+  );
+
+  // 火花线与窗口解耦：固定最近 30 天按天 token 趋势，标出最小 / 最大 / 当前。
+  const sparkDays = aggregate.days.slice(-30);
+  const values = sparkDays.map((point) => point.totalTokens);
+  if (values.length === 0) {
+    rows.push("Token(近30天) —");
+  } else {
+    const spark = sparkline(values);
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const last = values[values.length - 1];
+    rows.push(
+      `Token(近30天) ${spark}  最小 ${formatCount(min)} · 最大 ${formatCount(max)} · 当前 ${formatCount(last)}`,
+    );
+  }
+
+  // 窗口内没有命中上游的已完成请求：给出空态，不渲染空表 / 空详情；
+  // 但未发出（本地错误 / 无可用上游）仍要按窗口显示，否则会被误读成「窗口内什么都没发生」。
+  if (view.overall.requests === 0) {
+    const unrouted = view.unrouted.requests;
+    rows.push(
+      "",
+      pc.dim(`窗口内暂无已完成请求${unrouted > 0 ? ` · 未发出 ${formatCount(unrouted)}` : ""}`),
+    );
+    return rows;
+  }
+
+  const overall = view.overall;
+  const targets = view.targets;
+  rows.push(
     `汇总  请求 ${formatCount(overall.requests)} · 错误 ${formatCount(overall.errors)}（${percent(overall.errorRate)}）· 平均 ${overall.avgDurationMs}ms · 95分位 ${overall.p95DurationMs}ms`,
     pc.dim(
       `      TTFT 平均 ${overall.ttftSamples > 0 ? `${overall.avgTtftMs}ms` : "—"} · 输出 ${formatRate(overall.outputTokensPerSecond)} tok/s · 截断 ${formatCount(overall.truncations)} · 拦截 ${formatCount(overall.contentFiltered)} · 中断 ${formatCount(overall.aborted)}`,
@@ -437,7 +463,6 @@ function statsRows(state: TuiState, height: number, width: number): string[] {
   );
 
   // 统计只按上游身份聚合（provider + model + endpoint），不再按 routeKind 拆行，表格因此没有「路由」列。
-  const targets = statsTargets(state);
   const selectedIndex = selectedStatsIndex(state, targets.length);
   const targetRequests = targets.reduce((sum, target) => sum + target.requests, 0);
   const targetErrors = targets.reduce((sum, target) => sum + target.errors, 0);
@@ -449,7 +474,7 @@ function statsRows(state: TuiState, height: number, width: number): string[] {
 
   rows.push(
     pc.dim(
-      `命中 ${formatCount(targetRequests)} 请求 · 错误 ${formatCount(targetErrors)} · 未发出 ${formatCount(aggregate.unrouted.requests)}${targets.length > shown ? ` · 表格显示 ${shown}/${targets.length} 行` : ""}`,
+      `命中 ${formatCount(targetRequests)} 请求 · 错误 ${formatCount(targetErrors)} · 未发出 ${formatCount(view.unrouted.requests)}${targets.length > shown ? ` · 表格显示 ${shown}/${targets.length} 行` : ""}`,
     ),
   );
 
@@ -666,7 +691,7 @@ export function renderTui(
   const keyHint = state.switching
     ? "处理中… 请稍候（Ctrl-C 可退出）"
     : state.page === "stats"
-      ? "↑↓ 选择目标  Enter 指标  h 天/小时  ←→ 换页  r 刷新  q 退出"
+      ? "↑↓ 选择目标  h 窗口  ←→ 换页  r 刷新  q 退出"
       : state.page === "providers"
         ? "↑↓ 选中  Enter 打开操作菜单  ←→ 换页  r 刷新  q 退出"
         : "↑↓ 选中  ←→ 换区/换页  Enter 确认  Esc 取消  r 刷新  q 退出";

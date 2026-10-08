@@ -28,8 +28,7 @@ import {
   selectedStatsIndex,
   selectedStatsTarget,
   statsTargets,
-  toggleStatsRange,
-  toggleStatsMetric,
+  toggleStatsWindow,
   TUI_PAGES,
   type StatusSnapshot,
   type ProviderSummary,
@@ -848,8 +847,9 @@ function sampleStatsEvents(): RequestEvent[] {
 
 const statsAggregate = (() => {
   const accumulator = new AggregateAccumulator();
-  for (const item of sampleStatsEvents()) accumulator.add(item);
-  return accumulator.snapshot(new Date(2026, 8, 27, 12, 0, 0).getTime(), 30);
+  const events = sampleStatsEvents();
+  for (const item of events) accumulator.add(item);
+  return accumulator.snapshot(new Date(2026, 8, 27, 12, 0, 0).getTime(), 30, events);
 })();
 
 const statsStatus: StatusSnapshot = {
@@ -883,9 +883,11 @@ test("统计页渲染按天火花线与 provider 切片，且不泄露密钥", (
 
   assert.match(output, /用量统计/);
   assert.match(output, /\[ 统计 \]/);
-  assert.match(output, /Token/);
+  assert.match(output, /窗口 最近10条 · 已完成请求 · 进行中不计/);
+  assert.match(output, /Token\(近30天\)/);
   assert.match(output, /[\u2581-\u2588]/);
-  assert.match(output, /最近 30 天/);
+  // 火花线固定最近 30 天 token 趋势，并标出最小 / 最大 / 当前。
+  assert.match(output, /最小 30 · 最大 300 · 当前 30/);
   assert.match(output, /汇总\s+请求 3/);
   assert.match(output, /中断 0/);
   assert.match(output, /TTFT/);
@@ -904,18 +906,21 @@ test("统计页渲染按天火花线与 provider 切片，且不泄露密钥", (
 test("统计页显示中断数并按目标渲染 TTFT 列（无样本显示 —）", () => {
   const accumulator = new AggregateAccumulator();
   const sample = sampleStatsEvents();
-  accumulator.add({ ...sample[0], termination: "completed" }); // 非流式，无 TTFT 样本
-  accumulator.add({
-    ...sample[1],
-    ok: false,
-    status: null,
-    termination: "client_aborted",
-    ttftMs: 120,
-    usage: null,
-    finishReason: null,
-  });
-  accumulator.add({ ...sample[2], termination: "completed" }); // 另一个目标，无 TTFT 样本
-  const aggregate = accumulator.snapshot(new Date(2026, 8, 27, 12, 0, 0).getTime(), 30);
+  const events: RequestEvent[] = [
+    { ...sample[0], termination: "completed" }, // 非流式，无 TTFT 样本
+    {
+      ...sample[1],
+      ok: false,
+      status: null,
+      termination: "client_aborted",
+      ttftMs: 120,
+      usage: null,
+      finishReason: null,
+    },
+    { ...sample[2], termination: "completed" }, // 另一个目标，无 TTFT 样本
+  ];
+  for (const item of events) accumulator.add(item);
+  const aggregate = accumulator.snapshot(new Date(2026, 8, 27, 12, 0, 0).getTime(), 30, events);
   const state = openPage(
     createTuiState(buildCatalog(config), {
       ...status,
@@ -938,10 +943,9 @@ test("统计页无 TTFT 样本时汇总行显示 — 而不是 0ms", () => {
   const accumulator = new AggregateAccumulator();
   const sample = sampleStatsEvents();
   // 只喂非流式事件（ttftMs 恒为 null）→ overall.ttftSamples === 0。
-  for (const item of [sample[0], sample[2], sample[3]]) {
-    accumulator.add({ ...item, termination: "completed" });
-  }
-  const aggregate = accumulator.snapshot(new Date(2026, 8, 27, 12, 0, 0).getTime(), 30);
+  const events = [sample[0], sample[2], sample[3]].map((item) => ({ ...item, termination: "completed" as const }));
+  for (const item of events) accumulator.add(item);
+  const aggregate = accumulator.snapshot(new Date(2026, 8, 27, 12, 0, 0).getTime(), 30, events);
   assert.equal(aggregate.overall.ttftSamples, 0);
   const state = openPage(
     createTuiState(buildCatalog(config), {
@@ -974,38 +978,43 @@ test("统计页 ↑↓ 在目标表格里移动选中行且不越界", () => {
   assert.equal(selectedStatsTarget({ ...state, status: null }), null);
 });
 
-test("统计页 h 在按天 / 按小时粒度间切换，小时火花线消费 aggregate.hours", () => {
-  const accumulator = new AggregateAccumulator();
-  const sample = sampleStatsEvents();
-  // 同一天三个小时各一条：hours 有 3 桶，days 只有 1 天，可区分火花线数据源。
-  const base = new Date(2026, 8, 27, 0, 0, 0).getTime();
-  for (const hour of [9, 11, 15]) {
-    accumulator.add({ ...sample[1], ts: base + hour * 3_600_000 });
-  }
-  const aggregate = accumulator.snapshot(new Date(2026, 8, 27, 20, 0, 0).getTime(), 30);
-  assert.equal(aggregate.days.length, 1);
-  assert.equal(aggregate.hours.length, 3);
+test("统计页 h 在 5 个窗口间循环，汇总与表格随窗口重算", () => {
+  let state = openPage(createTuiState(buildCatalog(config), statsStatus), "stats");
+  assert.equal(state.statsWindow, "recent10");
+  const recentOutput = renderTui(state, { height: 34, width: 100 });
+  assert.match(recentOutput, /窗口 最近10条 · 已完成请求 · 进行中不计/);
+  assert.match(recentOutput, /汇总\s+请求 3/);
 
-  let state = openPage(
-    createTuiState(buildCatalog(config), {
-      ...status,
-      stats: { enabled: true, retentionDays: 30, aggregate },
-    }),
-    "stats",
-  );
-  assert.equal(state.statsRange, "day");
-  const dayOutput = renderTui(state, { height: 34, width: 100 });
-  assert.match(dayOutput, /火花线 按天/);
-  assert.equal(dayOutput.match(/Token ([▁-█]+)/)?.[1]?.length, 1);
-
-  state = toggleStatsRange(state);
-  assert.equal(state.statsRange, "hour");
+  // 近1小时：样例事件都完成于 11:00 前 → 空窗口。
+  state = toggleStatsWindow(state, 1);
+  assert.equal(state.statsWindow, "hour1");
   const hourOutput = renderTui(state, { height: 34, width: 100 });
-  assert.match(hourOutput, /火花线 按小时（最近 3 个活跃小时）/);
-  assert.equal(hourOutput.match(/Token ([▁-█]+)/)?.[1]?.length, 3);
+  assert.match(hourOutput, /窗口 近1小时/);
+  assert.match(hourOutput, /窗口内暂无已完成请求/);
 
+  // 今天：只含 09-27 的两条路由事件（unrouted 不算）。
+  state = toggleStatsWindow(state, 1);
+  assert.equal(state.statsWindow, "today");
+  const todayOutput = renderTui(state, { height: 34, width: 100 });
+  assert.match(todayOutput, /窗口 今天/);
+  assert.match(todayOutput, /汇总\s+请求 2/);
+
+  // 近7天 / 近30天：都含 09-26 + 09-27 的三条。
+  state = toggleStatsWindow(state, 1);
+  assert.equal(state.statsWindow, "week7");
+  assert.match(renderTui(state, { height: 34, width: 100 }), /窗口 近7天/);
+  state = toggleStatsWindow(state, 1);
+  assert.equal(state.statsWindow, "month30");
+  assert.match(renderTui(state, { height: 34, width: 100 }), /汇总\s+请求 3/);
+
+  // 循环回最近10条；反向循环到 month30。
+  state = toggleStatsWindow(state, 1);
+  assert.equal(state.statsWindow, "recent10");
+  assert.equal(toggleStatsWindow(state, -1).statsWindow, "month30");
+
+  // 其它页面 h 不切窗口。
   const modelsState = createTuiState(buildCatalog(config), statsStatus);
-  assert.equal(toggleStatsRange(modelsState), modelsState);
+  assert.equal(toggleStatsWindow(modelsState, 1), modelsState);
 });
 
 test("统计页选中目标详情覆盖延迟 / 吞吐 / token / 可靠性全部指标", () => {
@@ -1031,7 +1040,7 @@ test("统计页选中目标详情覆盖延迟 / 吞吐 / token / 可靠性全部
 test("自动刷新恢复统计页视图状态，并按身份重定位选中目标", () => {
   const before = {
     ...openPage(createTuiState(buildCatalog(config), statsStatus), "stats"),
-    statsRange: "hour" as const,
+    statsWindow: "week7" as const,
     statsSelected: 0,
   };
   assert.equal(selectedStatsTarget(before)?.model, "glm-5.3-flash");
@@ -1042,12 +1051,18 @@ test("自动刷新恢复统计页视图状态，并按身份重定位选中目�
     stats: {
       enabled: true,
       retentionDays: 30,
-      aggregate: { ...statsAggregate, targets: [...statsAggregate.targets].reverse() },
+      aggregate: {
+        ...statsAggregate,
+        targets: [...statsAggregate.targets].reverse(),
+        windows: statsAggregate.windows.map((window) => ({
+          ...window,
+          targets: [...window.targets].reverse(),
+        })),
+      },
     },
   };
   const restored = restoreStatsView(before, createTuiState(buildCatalog(config), reordered));
-  assert.equal(restored.statsRange, "hour");
-  assert.equal(restored.statsMetric, before.statsMetric);
+  assert.equal(restored.statsWindow, "week7");
   assert.equal(restored.statsSelected, 1, "下标随目标身份移动");
   assert.equal(selectedStatsTarget(restored)?.model, "glm-5.3-flash");
 
@@ -1056,7 +1071,11 @@ test("自动刷新恢复统计页视图状态，并按身份重定位选中目�
     before,
     createTuiState(buildCatalog(config), {
       ...statsStatus,
-      stats: { enabled: true, retentionDays: 30, aggregate: { ...statsAggregate, targets: [] } },
+      stats: {
+        enabled: true,
+        retentionDays: 30,
+        aggregate: { ...statsAggregate, targets: [], windows: [] },
+      },
     }),
   );
   assert.equal(empty.statsSelected, 0);
@@ -1100,6 +1119,12 @@ test("统计页端点列仅在可见行端点多于一个且宽度允许时出�
         targets: statsAggregate.targets.map((target, index) =>
           index === 1 ? { ...target, endpoint: "/v1/responses" } : target,
         ),
+        windows: statsAggregate.windows.map((window) => ({
+          ...window,
+          targets: window.targets.map((target, index) =>
+            index === 1 ? { ...target, endpoint: "/v1/responses" } : target,
+          ),
+        })),
       },
     },
   };
@@ -1186,7 +1211,7 @@ test("统计页表格直接给出 tok/s，p95 / p50 只留在选中详情", () =
 test("统计页把 token 大数折算成 K / M", () => {
   const accumulator = new AggregateAccumulator();
   const sample = sampleStatsEvents();
-  accumulator.add({
+  const events: RequestEvent[] = [{
     ...sample[1],
     usage: {
       input: 12_000_000,
@@ -1195,8 +1220,9 @@ test("统计页把 token 大数折算成 K / M", () => {
       cached: 3_400_000,
       reasoning: 999_400,
     },
-  });
-  const aggregate = accumulator.snapshot(new Date(2026, 8, 27, 12, 0, 0).getTime(), 30);
+  }];
+  for (const item of events) accumulator.add(item);
+  const aggregate = accumulator.snapshot(new Date(2026, 8, 27, 12, 0, 0).getTime(), 30, events);
   const state = openPage(
     createTuiState(buildCatalog(config), {
       ...status,
@@ -1208,20 +1234,72 @@ test("统计页把 token 大数折算成 K / M", () => {
   assert.match(output, /输入 12M · 输出 1\.3M · 总 13\.3M · 缓存 3\.4M · 推理 999\.4K/);
 });
 
-test("统计页 Enter 在 token / 请求数之间切换", () => {
-  let state = openPage(createTuiState(buildCatalog(config), statsStatus), "stats");
-  assert.equal(state.statsMetric, "tokens");
-  const tokensOutput = renderTui(state, { height: 30, width: 90 });
-  assert.match(tokensOutput, /Token [\u2581-\u2588]/);
+test("旧 daemon（无 windows）降级为全期汇总并提示", () => {
+  const legacy: StatusSnapshot = {
+    ...statsStatus,
+    stats: {
+      enabled: true,
+      retentionDays: 30,
+      aggregate: { ...statsAggregate, windows: [] },
+    },
+  };
+  const state = openPage(createTuiState(buildCatalog(config), legacy), "stats");
+  const output = renderTui(state, { height: 30, width: 90 });
+  assert.match(output, /窗口 全期（daemon 未提供窗口数据）/);
+  assert.match(output, /汇总\s+请求 3/);
+  assert.match(output, /ark\/glm-5\.3-flash/);
+});
 
-  state = toggleStatsMetric(state);
-  assert.equal(state.statsMetric, "requests");
-  const requestsOutput = renderTui(state, { height: 30, width: 90 });
-  assert.match(requestsOutput, /请求 [\u2581-\u2588]/);
+test("统计页窗口内无已完成请求时给出空态", () => {
+  const accumulator = new AggregateAccumulator();
+  const events = sampleStatsEvents();
+  for (const item of events) accumulator.add(item);
+  const aggregate = accumulator.snapshot(new Date(2026, 8, 27, 12, 0, 0).getTime(), 30, events);
+  let state = openPage(
+    createTuiState(buildCatalog(config), {
+      ...status,
+      stats: { enabled: true, retentionDays: 30, aggregate },
+    }),
+    "stats",
+  );
+  state = toggleStatsWindow(state, 1); // recent10 → hour1
+  assert.equal(state.statsWindow, "hour1");
+  const output = renderTui(state, { height: 30, width: 90 });
+  assert.match(output, /窗口内暂无已完成请求/);
+  assert.match(output, /Token\(近30天\)/);
+});
 
-  // 其它页面 Enter 不切指标
-  const modelsState = createTuiState(buildCatalog(config), statsStatus);
-  assert.equal(toggleStatsMetric(modelsState), modelsState);
+test("统计页空窗口里未发出的请求仍按窗口显示", () => {
+  const now = new Date(2026, 8, 27, 12, 0, 0).getTime();
+  const unrouted: RequestEvent = {
+    ts: now - 1000,
+    provider: null,
+    model: null,
+    endpoint: "/v1/chat/completions",
+    stream: false,
+    status: 404,
+    ok: false,
+    durationMs: 3,
+    ttftMs: null,
+    requestedModel: "ghost/model",
+    routeKind: "unrouted",
+    routingMode: true,
+    usage: null,
+    finishReason: null,
+    rateLimit: null,
+  };
+  const accumulator = new AggregateAccumulator();
+  accumulator.add(unrouted);
+  const aggregate = accumulator.snapshot(now, 30, [unrouted]);
+  const state = openPage(
+    createTuiState(buildCatalog(config), {
+      ...status,
+      stats: { enabled: true, retentionDays: 30, aggregate },
+    }),
+    "stats",
+  );
+  const output = renderTui(state, { height: 30, width: 90 });
+  assert.match(output, /窗口内暂无已完成请求 · 未发出 1/);
 });
 
 test("统计页在离线 / 未启用 / 无聚合时都不崩溃", () => {
@@ -1286,6 +1364,33 @@ test("parseStatusSnapshot 解析 stats 聚合与非法输入", () => {
     ),
     false,
   );
+  // windows 解析：顺序固定，每个窗口含 overall / targets / unrouted。
+  assert.deepEqual(
+    parsed?.stats?.aggregate?.windows.map((window) => window.id),
+    ["recent10", "hour1", "today", "week7", "month30"],
+  );
+  assert.equal(parsed?.stats?.aggregate?.windows[0]?.label, "最近10条");
+  assert.equal(parsed?.stats?.aggregate?.windows[0]?.kind, "recent");
+  assert.equal(
+    parsed?.stats?.aggregate?.windows.some((window) => typeof window.unrouted?.requests !== "number"),
+    false,
+  );
+
+  // 缺 windows（旧 daemon）→ []，渲染时回退全期。
+  const noWindows = JSON.parse(JSON.stringify(statsStatus));
+  delete noWindows.stats.aggregate.windows;
+  assert.deepEqual(parseStatusSnapshot(noWindows)?.stats?.aggregate?.windows, []);
+
+  // windows 非数组 → []；单个非法窗口被跳过而不是让整段失效。
+  const badWindows = JSON.parse(JSON.stringify(statsStatus));
+  badWindows.stats.aggregate.windows = "nope";
+  assert.deepEqual(parseStatusSnapshot(badWindows)?.stats?.aggregate?.windows, []);
+  const mixedWindows = JSON.parse(JSON.stringify(statsStatus));
+  mixedWindows.stats.aggregate.windows.push({ id: "bogus", label: "x", kind: "time" });
+  assert.equal(
+    parseStatusSnapshot(mixedWindows)?.stats?.aggregate?.windows.length,
+    statsAggregate.windows.length,
+  );
 
   const invalid = parseStatusSnapshot({
     port: 8787,
@@ -1300,6 +1405,8 @@ test("parseStatusSnapshot 解析 stats 聚合与非法输入", () => {
 
 test("旧 daemon 载荷里的 unrouted 目标仍能解析并渲染", () => {
   const legacy = JSON.parse(JSON.stringify(statsStatus));
+  // 真正的旧 daemon 不返回 windows：删掉后走全期降级，能看到全期 targets 里的 unrouted 行。
+  delete legacy.stats.aggregate.windows;
   legacy.stats.aggregate.targets.push({
     provider: null,
     model: null,

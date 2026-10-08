@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/usage-stats.md", "reason": "跨层契约：事件->聚合->status->TUI 统计页"}
+{"file": ".trellis/spec/frontend/interaction-guidelines.md", "reason": "统计页键位与渲染约束"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "statsWindow 视图状态与刷新恢复"}
+{"file": ".trellis/spec/frontend/architecture.md", "reason": "TUI 页面/焦点约定"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层数据流（聚合->载荷->解析->渲染）"}

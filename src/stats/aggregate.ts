@@ -55,12 +55,41 @@ export interface HourAggregate extends AggregateMetrics {
   hour: string;
 }
 
+/** 统计页窗口 id，顺序即 `STATS_WINDOWS` 的顺序（也是 `h` 的循环顺序）。 */
+export type StatsWindowId = "recent10" | "hour1" | "today" | "week7" | "month30";
+
+export interface StatsWindowSpec {
+  id: StatsWindowId;
+  /** 中文标签，daemon 生成随载荷返回，TUI 直接用，避免两处维护。 */
+  label: string;
+  /** `recent` 走内存环形缓冲；`time` 走按天桶。 */
+  kind: "recent" | "time";
+}
+
+/** 窗口选择器固定 5 项，顺序即 `h` 的循环顺序。 */
+export const STATS_WINDOWS: readonly StatsWindowSpec[] = [
+  { id: "recent10", label: "最近10条", kind: "recent" },
+  { id: "hour1", label: "近1小时", kind: "time" },
+  { id: "today", label: "今天", kind: "time" },
+  { id: "week7", label: "近7天", kind: "time" },
+  { id: "month30", label: "近30天", kind: "time" },
+];
+
+/** 一个窗口内的聚合：口径与全期完全一致（unrouted 仍单独计数、不进 overall / targets）。 */
+export interface StatsWindow extends StatsWindowSpec {
+  overall: AggregateMetrics;
+  targets: TargetAggregate[];
+  unrouted: AggregateMetrics;
+}
+
 export interface Aggregate {
   overall: AggregateMetrics;
   days: DayAggregate[];
   hours: HourAggregate[];
   targets: TargetAggregate[];
   unrouted: AggregateMetrics;
+  /** 新增字段，顺序 = `STATS_WINDOWS`；空窗口也返回（overall 全 0、targets 为空）。 */
+  windows: StatsWindow[];
 }
 
 /** 时延 / TTFT 直方图的上边界（毫秒）。最后一桶表示「大于最大边界」。 */
@@ -71,6 +100,7 @@ export const LATENCY_BOUNDS: readonly number[] = [
 
 const HIST_SIZE = LATENCY_BOUNDS.length + 1;
 const MAX_BOUND = LATENCY_BOUNDS[LATENCY_BOUNDS.length - 1];
+const HOUR_MS = 3_600_000;
 
 interface Bucket {
   requests: number;
@@ -100,14 +130,21 @@ interface TargetState {
   provider: string | null;
   model: string | null;
   endpoint: string;
-  bucket: Bucket;
+  /** 按上游行的天桶；全期与时间窗口都由保留期内的天合并而来，避免再存一份全期桶。 */
+  days: Map<string, Bucket>;
 }
 
 interface DayState {
   bucket: Bucket;
   unrouted: Bucket;
   hours: Map<string, Bucket>;
-  targets: Map<string, TargetState>;
+}
+
+interface AccumulatedTarget {
+  provider: string | null;
+  model: string | null;
+  endpoint: string;
+  bucket: Bucket;
 }
 
 function emptyBucket(): Bucket {
@@ -261,18 +298,72 @@ function targetKey(event: RequestEvent): string {
   return [event.provider ?? "\u0000", event.model ?? "\u0000", event.endpoint].join("\u0001");
 }
 
+/** 目标排序：请求数降序，再按 provider / model / endpoint 稳定收敛。全期与窗口共用同一口径。 */
+function sortTargets(targets: Map<string, AccumulatedTarget>): TargetAggregate[] {
+  return [...targets.values()]
+    .map((target) => ({
+      ...metricsOf(target.bucket),
+      provider: target.provider,
+      model: target.model,
+      endpoint: target.endpoint,
+    }))
+    .sort(
+      (a, b) =>
+        b.requests - a.requests ||
+        (a.provider ?? "").localeCompare(b.provider ?? "") ||
+        (a.model ?? "").localeCompare(b.model ?? "") ||
+        a.endpoint.localeCompare(b.endpoint),
+    );
+}
+
+/**
+ * 从原始事件聚合出一个窗口：口径与全期一致（`unrouted` 单独计数，不进 `overall` / `targets`）。
+ * 供「最近 N 条」与「近 1 小时」这类环形缓冲窗口复用。
+ */
+export function aggregateEvents(events: readonly RequestEvent[]): {
+  overall: AggregateMetrics;
+  targets: TargetAggregate[];
+  unrouted: AggregateMetrics;
+} {
+  const overall = emptyBucket();
+  const unrouted = emptyBucket();
+  const targets = new Map<string, AccumulatedTarget>();
+  for (const event of events) {
+    if (event.routeKind === "unrouted") {
+      addToBucket(unrouted, event);
+      continue;
+    }
+    addToBucket(overall, event);
+    const key = targetKey(event);
+    let target = targets.get(key);
+    if (!target) {
+      target = {
+        provider: event.provider,
+        model: event.model,
+        endpoint: event.endpoint,
+        bucket: emptyBucket(),
+      };
+      targets.set(key, target);
+    }
+    addToBucket(target.bucket, event);
+  }
+  return { overall: metricsOf(overall), targets: sortTargets(targets), unrouted: metricsOf(unrouted) };
+}
+
 /**
  * 内存累加器：`add` 为 O(1)，`snapshot` 为 O(保留期内的桶数)（默认约 30 天 × 24 小时 + 目标数）。
  * 快照时顺带丢弃保留期之外的天，内存不会无限增长。
  */
 export class AggregateAccumulator {
   private readonly days = new Map<string, DayState>();
+  /** 每个上游目标的按天桶；全期与时间窗口都由保留期内的天合并而来。 */
+  private readonly targets = new Map<string, TargetState>();
 
   add(event: RequestEvent): void {
     const day = dayKey(event.ts);
     let state = this.days.get(day);
     if (!state) {
-      state = { bucket: emptyBucket(), unrouted: emptyBucket(), hours: new Map(), targets: new Map() };
+      state = { bucket: emptyBucket(), unrouted: emptyBucket(), hours: new Map() };
       this.days.set(day, state);
     }
     // 请求从未发往上游：路由失败（配置里没有的模型/供应商）、请求体不可读（400）、
@@ -295,17 +386,22 @@ export class AggregateAccumulator {
     addToBucket(hourBucket, event);
 
     const key = targetKey(event);
-    let target = state.targets.get(key);
+    let target = this.targets.get(key);
     if (!target) {
       target = {
         provider: event.provider,
         model: event.model,
         endpoint: event.endpoint,
-        bucket: emptyBucket(),
+        days: new Map(),
       };
-      state.targets.set(key, target);
+      this.targets.set(key, target);
     }
-    addToBucket(target.bucket, event);
+    let dayBucket = target.days.get(day);
+    if (!dayBucket) {
+      dayBucket = emptyBucket();
+      target.days.set(day, dayBucket);
+    }
+    addToBucket(dayBucket, event);
   }
 
   /** 已跟踪的天数（保留期内）。 */
@@ -313,26 +409,62 @@ export class AggregateAccumulator {
     return this.days.size;
   }
 
-  snapshot(now: number = Date.now(), retentionDays = 30): Aggregate {
+  /**
+   * 快照：全期 + 按天 / 按小时 + 按上游目标 + 5 个时间窗口。
+   * `recent` 是调用方（采集器）传入的环形缓冲事件，用于 `recent10` / `hour1` 窗口——
+   * 累加器本身只留桶、不留原始事件，避免常驻内存随流量增长。
+   */
+  snapshot(now: number = Date.now(), retentionDays = 30, recent: readonly RequestEvent[] = []): Aggregate {
     const keep = recentDayKeys(retentionDays, now);
-    const overall = emptyBucket();
-    const unrouted = emptyBucket();
-    const targets = new Map<string, TargetState>();
-    const days: DayAggregate[] = [];
-    const hours: HourAggregate[] = [];
 
     const orderedDays = [...this.days.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+    const keptDays: [string, DayState][] = [];
     for (const [day, state] of orderedDays) {
       if (!keep.has(day)) {
         this.days.delete(day);
         continue;
       }
+      keptDays.push([day, state]);
+    }
+
+    // 丢弃保留期之外的目标天桶；某个目标所有天都过期时整个删掉，内存不无限增长。
+    for (const [key, target] of this.targets) {
+      for (const day of target.days.keys()) {
+        if (!keep.has(day)) target.days.delete(day);
+      }
+      if (target.days.size === 0) this.targets.delete(key);
+    }
+
+    const overall = emptyBucket();
+    const unrouted = emptyBucket();
+    const days: DayAggregate[] = [];
+    const hours: HourAggregate[] = [];
+    for (const [day, state] of keptDays) {
       mergeInto(overall, state.bucket);
       mergeInto(unrouted, state.unrouted);
       days.push({ ...metricsOf(state.bucket), day });
       for (const [hour, bucket] of state.hours) hours.push({ ...metricsOf(bucket), hour });
-      for (const [key, target] of state.targets) {
-        let accumulated = targets.get(key);
+    }
+
+    hours.sort((a, b) => (a.hour < b.hour ? -1 : a.hour > b.hour ? 1 : 0));
+
+    return {
+      overall: metricsOf(overall),
+      days,
+      hours,
+      targets: this.collectTargets(keep),
+      unrouted: metricsOf(unrouted),
+      windows: this.buildWindows(now, recent),
+    };
+  }
+
+  /** 合并保留期（或窗口）内的目标天桶为上游目标列表。 */
+  private collectTargets(dayKeys: Set<string>): TargetAggregate[] {
+    const targets = new Map<string, AccumulatedTarget>();
+    for (const [key, target] of this.targets) {
+      let accumulated: AccumulatedTarget | null = null;
+      for (const [day, bucket] of target.days) {
+        if (!dayKeys.has(day)) continue;
         if (!accumulated) {
           accumulated = {
             provider: target.provider,
@@ -342,27 +474,40 @@ export class AggregateAccumulator {
           };
           targets.set(key, accumulated);
         }
-        mergeInto(accumulated.bucket, target.bucket);
+        mergeInto(accumulated.bucket, bucket);
       }
     }
+    return sortTargets(targets);
+  }
 
-    hours.sort((a, b) => (a.hour < b.hour ? -1 : a.hour > b.hour ? 1 : 0));
+  /** 合并一组自然日的整体 / 未发出 / 目标桶；`today` / `week7` / `month30` 共用。 */
+  private collectDays(dayKeys: Set<string>): {
+    overall: AggregateMetrics;
+    targets: TargetAggregate[];
+    unrouted: AggregateMetrics;
+  } {
+    const overall = emptyBucket();
+    const unrouted = emptyBucket();
+    for (const [day, state] of this.days) {
+      if (!dayKeys.has(day)) continue;
+      mergeInto(overall, state.bucket);
+      mergeInto(unrouted, state.unrouted);
+    }
+    return { overall: metricsOf(overall), targets: this.collectTargets(dayKeys), unrouted: metricsOf(unrouted) };
+  }
 
-    const targetList: TargetAggregate[] = [...targets.values()]
-      .map((target) => ({
-        ...metricsOf(target.bucket),
-        provider: target.provider,
-        model: target.model,
-        endpoint: target.endpoint,
-      }))
-      .sort(
-        (a, b) =>
-          b.requests - a.requests ||
-          (a.provider ?? "").localeCompare(b.provider ?? "") ||
-          (a.model ?? "").localeCompare(b.model ?? "") ||
-          a.endpoint.localeCompare(b.endpoint),
-      );
-
-    return { overall: metricsOf(overall), days, hours, targets: targetList, unrouted: metricsOf(unrouted) };
+  /** 5 个窗口，顺序 = `STATS_WINDOWS`；空窗口返回全 0，不省略。 */
+  private buildWindows(now: number, recent: readonly RequestEvent[]): StatsWindow[] {
+    const values = new Map<
+      StatsWindowId,
+      { overall: AggregateMetrics; targets: TargetAggregate[]; unrouted: AggregateMetrics }
+    >([
+      ["recent10", aggregateEvents(recent.slice(-10))],
+      ["hour1", aggregateEvents(recent.filter((event) => event.ts + event.durationMs >= now - HOUR_MS))],
+      ["today", this.collectDays(new Set([dayKey(now)]))],
+      ["week7", this.collectDays(recentDayKeys(7, now))],
+      ["month30", this.collectDays(recentDayKeys(30, now))],
+    ]);
+    return STATS_WINDOWS.map((spec) => ({ ...spec, ...values.get(spec.id)! }));
   }
 }

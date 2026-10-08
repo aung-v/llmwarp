@@ -8,6 +8,7 @@
 import type { Aggregate } from "./aggregate.js";
 import { AggregateAccumulator } from "./aggregate.js";
 import type { RequestEvent } from "./event.js";
+import { RecentBuffer, completionTime } from "./recent.js";
 import { STATS_DIR, appendEvent, prune, readRange } from "./store.js";
 
 export interface CollectorConfig {
@@ -26,6 +27,7 @@ export class StatsCollector {
   private readonly dir: string;
   private readonly now: () => number;
   private readonly accumulator = new AggregateAccumulator();
+  private readonly recent = new RecentBuffer();
   private seeded = false;
 
   constructor(options: CollectorOptions = {}) {
@@ -46,7 +48,7 @@ export class StatsCollector {
   /** 历史聚合快照；纯内存计算，进程内最多读一次落盘历史。 */
   get aggregate(): Aggregate {
     this.seed();
-    return this.accumulator.snapshot(this.now(), this.retentionDays);
+    return this.accumulator.snapshot(this.now(), this.retentionDays, this.recent.events());
   }
 
   configure(config: CollectorConfig): void {
@@ -65,15 +67,24 @@ export class StatsCollector {
     if (!this.enabled) return;
     // 必须先 seed：读到的历史不含本条（尚未落盘），避免与下面的 add 重复计数。
     this.seed();
-    if (appendEvent(event, this.dir)) this.accumulator.add(event);
+    // 落盘成功才进内存视图（与累加器口径一致）；环形缓冲与累加器同步写入。
+    if (appendEvent(event, this.dir)) {
+      this.accumulator.add(event);
+      this.recent.add(event);
+    }
   }
 
   /** 读一次落盘历史灌入累加器；只在启用时执行，且只执行一次。 */
   private seed(): void {
     if (this.seeded || !this.enabled) return;
     this.seeded = true;
-    for (const event of readRange(this.retentionDays, this.dir, this.now())) {
+    const events = readRange(this.retentionDays, this.dir, this.now());
+    // 按完成时刻升序回灌，保证环形缓冲的「最近 N 条」就是最近完成的请求
+    // （`ts` 是开始时刻，长请求可能很早就开始、很晚才完成）。
+    events.sort((a, b) => completionTime(a) - completionTime(b));
+    for (const event of events) {
       this.accumulator.add(event);
+      this.recent.add(event);
     }
   }
 }

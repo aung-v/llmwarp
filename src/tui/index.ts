@@ -45,8 +45,7 @@ import {
   selectedProvider,
   selectedProviderAction,
   selectedRouting,
-  toggleStatsRange,
-  toggleStatsMetric,
+  toggleStatsWindow,
   type CatalogItem,
   type ProviderSummary,
   type StatusSnapshot,
@@ -398,12 +397,6 @@ export async function startTui(): Promise<void> {
       }
       return;
     }
-    if (state.page === "stats") {
-      // 统计页 Enter 只在 token / 请求数两种视图间切换，不涉及写操作。
-      state = toggleStatsMetric(state);
-      draw();
-      return;
-    }
     if (state.page === "routing") {
       state = beginRoutingConfirm(state);
     } else {
@@ -496,9 +489,9 @@ export async function startTui(): Promise<void> {
       return;
     }
 
-    // 统计页局部视图键：h 切换火花线粒度；只读操作，不涉及写。
+    // 统计页局部视图键：h 循环时间窗口；只读操作，不涉及写。
     if (!key.ctrl && state.page === "stats" && key.name === "h") {
-      state = toggleStatsRange(state);
+      state = toggleStatsWindow(state, 1);
       draw();
       return;
     }

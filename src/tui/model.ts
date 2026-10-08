@@ -1,4 +1,5 @@
 import { isValidModelName, type Config } from "../config.js";
+import { STATS_WINDOWS, type StatsWindow, type StatsWindowId } from "../stats/aggregate.js";
 import type {
   Aggregate,
   AggregateMetrics,
@@ -62,12 +63,6 @@ export type TuiPage = "models" | "routing" | "providers" | "stats";
 /** 顶部导航顺序，也决定 ←→ 换页循环顺序。 */
 export const TUI_PAGES: TuiPage[] = ["models", "routing", "providers", "stats"];
 
-/** 火花线指标：token 总量 / 请求数。 */
-export type StatsMetric = "tokens" | "requests";
-
-/** 火花线粒度：按天（days）或按小时（hours）。 */
-export type StatsRange = "day" | "hour";
-
 /** 键盘焦点区域：导航栏 / 当前页列表 / 守护进程信息栏（含重启按钮）。 */
 export type TuiFocus = "nav" | "list" | "daemon";
 
@@ -122,8 +117,8 @@ export interface TuiState {
   message: string | null;
   switching: boolean;
   useClientModel: boolean;
-  statsMetric: StatsMetric;
-  statsRange: StatsRange;
+  /** 统计页选中的时间窗口；`h` 在 `STATS_WINDOWS` 顺序里循环。 */
+  statsWindow: StatsWindowId;
   /** 选中的目标行（目标列表里的下标）；越界时按末行处理。 */
   statsSelected: number;
 }
@@ -200,8 +195,7 @@ export function createTuiState(
     message: null,
     switching: false,
     useClientModel,
-    statsMetric: "tokens",
-    statsRange: "day",
+    statsWindow: "recent10",
     statsSelected: 0,
   };
 }
@@ -269,21 +263,42 @@ export function selectedRouting(state: TuiState): RoutingOption {
   return ROUTING_OPTIONS[state.routingSelected] ?? ROUTING_OPTIONS[0];
 }
 
-/** 统计页 Enter：在 token / 请求数两种火花线指标间切换。 */
-export function toggleStatsMetric(state: TuiState): TuiState {
+/** 统计页 `h`：在 `STATS_WINDOWS` 的 5 个窗口间循环（`delta` = ±1）。 */
+export function toggleStatsWindow(state: TuiState, delta = 1): TuiState {
   if (navigationLocked(state) || state.page !== "stats") return state;
-  return { ...state, statsMetric: state.statsMetric === "tokens" ? "requests" : "tokens" };
+  const ids = STATS_WINDOWS.map((window) => window.id);
+  const index = ids.indexOf(state.statsWindow);
+  const next = ids[(((index + delta) % ids.length) + ids.length) % ids.length];
+  return { ...state, statsWindow: next };
 }
 
-/** 统计页 `h`：在按天 / 按小时两种火花线粒度间切换。 */
-export function toggleStatsRange(state: TuiState): TuiState {
-  if (navigationLocked(state) || state.page !== "stats") return state;
-  return { ...state, statsRange: state.statsRange === "day" ? "hour" : "day" };
+/** 统计页当前窗口的数据视图；`window` 为 null 表示 daemon 未提供 `windows`（旧载荷，回退全期）。 */
+export interface StatsWindowView {
+  overall: AggregateMetrics;
+  targets: TargetAggregate[];
+  unrouted: AggregateMetrics;
+  window: StatsWindow | null;
 }
 
-/** 统计页的目标列表（上游身份：provider + model + endpoint）；渲染、选中、刷新重定位共用同一份顺序。 */
+/** 取当前窗口的聚合；daemon 未提供 `windows` 时回退到全期 `overall` / `targets` / `unrouted`。 */
+export function statsWindowData(state: TuiState): StatsWindowView | null {
+  const aggregate = state.status?.stats?.aggregate;
+  if (!aggregate) return null;
+  const window = aggregate.windows.find((item) => item.id === state.statsWindow) ?? null;
+  if (window) {
+    return { overall: window.overall, targets: window.targets, unrouted: window.unrouted, window };
+  }
+  return {
+    overall: aggregate.overall,
+    targets: aggregate.targets,
+    unrouted: aggregate.unrouted,
+    window: null,
+  };
+}
+
+/** 统计页的目标列表（当前窗口，上游身份：provider + model + endpoint）；渲染、选中、刷新重定位共用同一份顺序。 */
 export function statsTargets(state: TuiState): TargetAggregate[] {
-  return state.status?.stats?.aggregate?.targets ?? [];
+  return statsWindowData(state)?.targets ?? [];
 }
 
 /** 选中行在目标列表里的有效下标；空列表返回 -1。 */
@@ -316,11 +331,11 @@ export function locateStatsTarget(targets: TargetAggregate[], target: TargetAggr
  * 目标行按请求量排序，下标会随流量漂移，所以选中行按身份重新定位而不是沿用下标。
  */
 export function restoreStatsView(previous: TuiState, next: TuiState): TuiState {
+  // 先恢复窗口，再按身份在当前窗口的目标列表里重定位选中行（两个窗口的目标行不同）。
+  const restored = { ...next, statsWindow: previous.statsWindow };
   return {
-    ...next,
-    statsMetric: previous.statsMetric,
-    statsRange: previous.statsRange,
-    statsSelected: locateStatsTarget(statsTargets(next), selectedStatsTarget(previous)),
+    ...restored,
+    statsSelected: locateStatsTarget(statsTargets(restored), selectedStatsTarget(previous)),
   };
 }
 
@@ -515,6 +530,43 @@ function parseMetrics(payload: unknown): AggregateMetrics | null {
   return metrics;
 }
 
+/** 全 0 指标：窗口的 `unrouted` 是后加字段，旧 daemon 缺省时降级为 0 而不是整段失效。 */
+function zeroMetrics(): AggregateMetrics {
+  const metrics = {} as AggregateMetrics;
+  for (const key of METRIC_KEYS) {
+    (metrics as unknown as Record<string, unknown>)[key] = 0;
+  }
+  metrics.outputTokensPerSecond = null;
+  metrics.aborted = 0;
+  return metrics;
+}
+
+/** 解析一组上游目标；非数组按空处理，任一元素非法即返回 null（整段不可信）。 */
+function parseTargets(payload: unknown): TargetAggregate[] | null {
+  if (!Array.isArray(payload)) return [];
+  const targets: TargetAggregate[] = [];
+  for (const item of payload) {
+    if (!item || typeof item !== "object") return null;
+    const record = item as Record<string, unknown>;
+    const metrics = parseMetrics(item);
+    if (!metrics || typeof record.endpoint !== "string") return null;
+    // 新 daemon 不再返回 routeKind；旧 daemon 仍带该字段，直接忽略即可，不影响解析。
+    targets.push({
+      ...metrics,
+      provider: typeof record.provider === "string" ? record.provider : null,
+      model: typeof record.model === "string" ? record.model : null,
+      endpoint: record.endpoint,
+    });
+  }
+  return targets;
+}
+
+const STATS_WINDOW_IDS = new Set<string>(STATS_WINDOWS.map((window) => window.id));
+
+function isStatsWindowId(value: unknown): value is StatsWindowId {
+  return typeof value === "string" && STATS_WINDOW_IDS.has(value);
+}
+
 function parseStatsSnapshot(payload: unknown): StatsSnapshot | null {
   if (!payload || typeof payload !== "object") return null;
   const value = payload as Record<string, unknown>;
@@ -557,25 +609,33 @@ function parseAggregate(payload: unknown): Aggregate | null {
     }
   }
 
-  const targets: TargetAggregate[] = [];
-  if (Array.isArray(value.targets)) {
-    for (const item of value.targets) {
-      if (!item || typeof item !== "object") return null;
+  const targets = parseTargets(value.targets);
+  if (!targets) return null;
+
+  // `windows` 是新增字段：旧 daemon 缺失 / 非数组时置空，TUI 回退到全期视图。
+  const windows: StatsWindow[] = [];
+  if (Array.isArray(value.windows)) {
+    for (const item of value.windows) {
+      if (!item || typeof item !== "object") continue;
       const record = item as Record<string, unknown>;
-      const metrics = parseMetrics(item);
-      if (!metrics) return null;
-      if (typeof record.endpoint !== "string") return null;
-      // 新 daemon 不再返回 routeKind；旧 daemon 仍带该字段，直接忽略即可，不影响解析。
-      targets.push({
-        ...metrics,
-        provider: typeof record.provider === "string" ? record.provider : null,
-        model: typeof record.model === "string" ? record.model : null,
-        endpoint: record.endpoint,
+      if (!isStatsWindowId(record.id)) continue;
+      if (record.kind !== "recent" && record.kind !== "time") continue;
+      if (typeof record.label !== "string") continue;
+      const windowOverall = parseMetrics(record.overall);
+      const windowTargets = parseTargets(record.targets);
+      if (!windowOverall || !windowTargets) continue;
+      windows.push({
+        id: record.id,
+        label: record.label,
+        kind: record.kind,
+        overall: windowOverall,
+        targets: windowTargets,
+        unrouted: parseMetrics(record.unrouted) ?? zeroMetrics(),
       });
     }
   }
 
-  return { overall, days, hours, targets, unrouted };
+  return { overall, days, hours, targets, unrouted, windows };
 }
 
 function parseMetricsSnapshot(payload: unknown): RequestMetricsSnapshot | null {
