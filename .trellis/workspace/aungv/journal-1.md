@@ -614,3 +614,44 @@ Follow-up to the stats feature, done outside a Trellis task at the user's reques
 
 - npm 发布改造（license/repository/engines/prepublishOnly/LICENSE/CI）仍是独立事项，未在本次范围内
 - 已知取舍：VERSION 在模块加载时读取，package.json 缺失/损坏会中断所有命令；npm 始终随包发布 package.json，故仅影响非常规布局
+
+
+## Session 21: 统计页口径与列义讲清楚：删总耗时列、窗口改统计范围、详情改成范围总计
+<!-- trellis-session: v=2 fp=7f5106a042b6f0c3 -->
+
+**Date**: 2026-10-08
+**Task**: 统计页口径与列义讲清楚：删总耗时列、窗口改统计范围、详情改成范围总计
+**Branch**: `master`
+
+### Summary
+
+用户反馈统计页看不懂，逐条改在文案与信息取舍上：目标表列名去术语（首字延迟/输出速度）、删掉误导性的总耗时列并新增口径/列义两行说明；「窗口」改为「统计范围」；详情区从选中上游改成当前范围总计（并删掉重复的顶部汇总）；统计页因此去掉选中态与 ↑↓；TUI 页脚统一措辞、去掉换页/换区与模型页空态死提示。README 与 spec 同步。
+
+### Main Changes
+
+- 目标表列名 平均/TTFT/tok/s → 首字延迟/输出速度，并删除总耗时列（端到端耗时被回答长度主导，横比上游会误导）；平均总耗时只留在总计块
+- 新增 dim 口径/列义 两行，讲清统计哪些请求与每列样本/单位；72 列下按「；」折行不截断
+- 「窗口」→「统计范围」（含顶部范围行、空态、页脚 h 提示、旧 daemon 降级行）；「窗口内暂无已完成请求」→「范围内暂无已完成请求」
+- 详情区改为「当前统计范围总计」（取当前范围 overall，字段更全）；删除顶部 3 行重复汇总
+- 统计页去掉选中态：无行高亮、页脚无 ↑↓、删掉 statsSelected 与重定位逻辑，restoreStatsView 只保留 statsWindow
+- 页脚统一措辞：不再出现 换页/换区；模型页空态去掉无行为的 Enter 确认
+- README + .trellis/spec(backend usage-stats、frontend interaction/state/architecture) 同步
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `55d4e76` | fix(tui): 统计页说清口径与列义，删掉误导性的「总耗时」列 |
+
+### Testing
+
+- [OK] [OK] npm run typecheck / npm test（186 pass）/ npm run build 全绿；版本仍 1.2.0
+- [OK] [OK] 独立 check 子代理逐条核对 12 项验收标准全 PASS；自渲染 72/90/100 列 × 34/24/23/18 行确认帧宽与不越界不变量
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 已知取舍：表内 输出速度 只给数字，单位 tok/s 写在列义里；若要表内直接带单位需再收窄其他列
