@@ -564,8 +564,8 @@ Follow-up to the stats feature, done outside a Trellis task at the user's reques
 
 ### Testing
 
-- [OK] [OK] npm run typecheck / npm test（182 pass）/ npm run build 全绿（仓库无 lint 脚本）
-- [OK] [OK] 新增/更新单测覆盖窗口循环、旧 daemon 降级、空窗口未发出计数、按身份重定位选中目标、删除目标锁定
+- [OK] npm run typecheck / npm test（182 pass）/ npm run build 全绿（仓库无 lint 脚本）
+- [OK] 新增/更新单测覆盖窗口循环、旧 daemon 降级、空窗口未发出计数、按身份重定位选中目标、删除目标锁定
 
 ### Status
 
@@ -602,9 +602,9 @@ Follow-up to the stats feature, done outside a Trellis task at the user's reques
 
 ### Testing
 
-- [OK] [OK] npm run typecheck / npm test（183 pass）/ npm run build 全绿（仓库无 lint 脚本）
-- [OK] [OK] 源码 tsx 与构建产物 dist/cli.js 的 --version 都是 1.2.0；daemon.json 与 /_llmwarp/status 的 version 都是 1.2.0（临时 XDG 配置 + 非 8787 端口隔离验证）
-- [OK] [OK] npm pack -> 装进仓库外临时工程 -> node_modules/.bin/llmwarp --version = 1.2.0，证明包内 ../package.json 解析成立；临时件已清理
+- [OK] npm run typecheck / npm test（183 pass）/ npm run build 全绿（仓库无 lint 脚本）
+- [OK] 源码 tsx 与构建产物 dist/cli.js 的 --version 都是 1.2.0；daemon.json 与 /_llmwarp/status 的 version 都是 1.2.0（临时 XDG 配置 + 非 8787 端口隔离验证）
+- [OK] npm pack -> 装进仓库外临时工程 -> node_modules/.bin/llmwarp --version = 1.2.0，证明包内 ../package.json 解析成立；临时件已清理
 
 ### Status
 
@@ -645,8 +645,8 @@ Follow-up to the stats feature, done outside a Trellis task at the user's reques
 
 ### Testing
 
-- [OK] [OK] npm run typecheck / npm test（186 pass）/ npm run build 全绿；版本仍 1.2.0
-- [OK] [OK] 独立 check 子代理逐条核对 12 项验收标准全 PASS；自渲染 72/90/100 列 × 34/24/23/18 行确认帧宽与不越界不变量
+- [OK] npm run typecheck / npm test（186 pass）/ npm run build 全绿；版本仍 1.2.0
+- [OK] 独立 check 子代理逐条核对 12 项验收标准全 PASS；自渲染 72/90/100 列 × 34/24/23/18 行确认帧宽与不越界不变量
 
 ### Status
 
@@ -682,8 +682,8 @@ Follow-up to the stats feature, done outside a Trellis task at the user's reques
 
 ### Testing
 
-- [OK] [OK] npm run typecheck / npm test（187 pass）/ npm run build 全绿；版本仍 1.2.0
-- [OK] [OK] 独立 check 子代理在 72/80/90/100 列 × 12~34 行、含大数与长事件下确认无截断、帧不变量成立；发现并修复 1 处宽度 bug
+- [OK] npm run typecheck / npm test（187 pass）/ npm run build 全绿；版本仍 1.2.0
+- [OK] 独立 check 子代理在 72/80/90/100 列 × 12~34 行、含大数与长事件下确认无截断、帧不变量成立；发现并修复 1 处宽度 bug
 
 ### Status
 
@@ -692,3 +692,41 @@ Follow-up to the stats feature, done outside a Trellis task at the user's reques
 ### Next Steps
 
 - 面板指标行排在反馈事件之后，长反馈会先把指标行挤出面板（既有行为，非本次引入）
+
+
+## Session 23: 反馈面板按优先级分配行数：指标行不再被反馈事件挤掉
+<!-- trellis-session: v=2 fp=f411a02ba6e54500 -->
+
+**Date**: 2026-10-08
+**Task**: 反馈面板按优先级分配行数：指标行不再被反馈事件挤掉
+**Branch**: `master`
+
+### Summary
+
+右下角「反馈 / 请求活动」面板按拼接顺序自上而下切片，4 条长反馈（每条最多 4 行）会把指标三行与最近请求整个挤掉（24 行终端实测三行全消失）。改为先算行数预算：指标块无条件优先、最新一条反馈保底一行、空行第一个牺牲、有空间时预留 2 行给最近请求；单条事件上限收到 2 行并在截断处补 `…`。旧反馈可被整条丢弃是有意的取舍。
+
+### Main Changes
+
+- activityRows 改为按优先级分配内容行数（新增 eventRows 助手与 EVENT_LINE_CAP = 2），渲染顺序不变
+- 指标 3 行（无指标 4 行空态）永不让位；recentReserve 在共享区 >= 4 行时预留 2 行给最近请求，避免旧反馈吃光空间
+- 单条事件最多 2 行，被行数截断时末行补 `…`（并加反例断言：本来就短的事件不得出现 `…`）
+- spec frontend/interaction-guidelines 记录优先级规则与「旧反馈可丢弃」的取舍
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f06aca6` | fix(tui): 反馈面板按优先级分配行数，指标行不再被反馈事件挤没 |
+
+### Testing
+
+- [OK] npm run typecheck / npm test（193 pass）/ npm run build 全绿；版本仍 1.2.0
+- [OK] 独立 check 子代理验证：24 行下指标三行 + 最新反馈都在、30 行下另有最近请求；宽度 {72,80,90,100} x 高度 {12,16,20,24,30,34} 加 493 组 fuzz 全无越界/截断
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 终端高度 <= 20 时反馈面板只剩 1 行内容，是守护进程面板固定 12 行的既有策略；若要改需单开任务
