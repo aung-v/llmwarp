@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 24
+- **Total Sessions**: 25
 - **Last Active**: 2026-10-08
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~770 | Active |
+| `journal-1.md` | ~809 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 25 | 2026-10-08 | npm 发布前补齐元数据（LICENSE / engines / bin / publishConfig / prepublishOnly） | `e91cca0` | `master` |
 | 24 | 2026-10-08 | 统计页表头回退 TTFT / tok/s（撤回我自己的过度改名） | `e6a52fb` | `master` |
 | 23 | 2026-10-08 | 反馈面板按优先级分配行数：指标行不再被反馈事件挤掉 | `f06aca6` | `master` |
 | 22 | 2026-10-08 | 实时请求活动面板：去掉重复 RPM，写明平均耗时与本次运行 | `5299260` | `master` |

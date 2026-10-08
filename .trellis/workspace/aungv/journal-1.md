@@ -768,3 +768,42 @@ Follow-up to the stats feature, done outside a Trellis task at the user's reques
 ### Next Steps
 
 - 教训：不要因为「更易懂」就改标准术语 / 缩写；用户只点了「平均」「窗口」不清楚，TTFT / tok/s 不在其中（已写入 spec 的「不要为了更好懂把表头换成中文全称」）
+
+
+## Session 25: npm 发布前补齐元数据（LICENSE / engines / bin / publishConfig / prepublishOnly）
+<!-- trellis-session: v=2 fp=0b90d65761e53f71 -->
+
+**Date**: 2026-10-08
+**Task**: npm 发布前补齐元数据（LICENSE / engines / bin / publishConfig / prepublishOnly）
+**Branch**: `master`
+
+### Summary
+
+用户要发布到 npm，先做完整体检再补齐阻塞项：本机默认 registry 是 npmmirror（只读，npm publish 会发错地方）、无 LICENSE、缺 engines/repository 等元数据、README 安装段还写着「未发布到 npm」、TUI 截图是相对路径（npm 页面会 404）。全部补齐并用打出来的 tarball 做全局安装端到端实测。
+
+### Main Changes
+
+- package.json：license MIT、engines >=20、author/repository/homepage/bugs/keywords；bin 去掉 ./ 前缀（消掉 npm 的 invalid bin 警告）；prepublishOnly = npm run build（避免发出旧 dist）；publishConfig.registry = https://registry.npmjs.org/（本机 ~/.npmrc 是 npmmirror 镜像，否则 npm publish 会往镜像发）
+- 新增 LICENSE（MIT，Copyright (c) 2026 aungv）；npm pack 从 5 个文件变 6 个（+LICENSE）、48.3 kB
+- README：安装段改成 npm install -g llmwarp / npx 优先，源码构建降为「开发用」；TUI 截图改用 https://raw.githubusercontent.com/aung-v/llmwarp/master/assets/llmwarp-tui.png（远端 200 已验证）
+- 版本仍 1.2.0，未动 src/ 与 test/
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e91cca0` | chore(release): 补齐 npm 发布元数据与 README 安装段 |
+
+### Testing
+
+- [OK] npm publish --dry-run：无 bin 警告、发布源 https://registry.npmjs.org/、6 个文件、仅剩「需要登录」提示；npm pack 内容含 dist/ 三件套 + LICENSE + README + package.json
+- [OK] tarball 全局安装（npm i -g ./llmwarp-1.2.0.tgz）后：bin 符号链接建立、--version = 1.2.0、init、start(临时配置 18789)、status、/v1/models、stop 全部通过；未碰用户 8787 的 daemon
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 待用户 npm login --registry=https://registry.npmjs.org 后执行 npm publish（1.2.0，名字未被占用）；如需换许可证只需改 package.json 的 license 字段 + LICENSE 文件
+- 教训：不要用 `| head` 截断会写 dist 的命令——npm publish/tsup（clean:true）先删 dist 再重建，被 SIGPIPE 打断后 dist 为空，pack 出来的 tarball 没有 dist、bin 链接也不会生成（本次已重建并复验）
