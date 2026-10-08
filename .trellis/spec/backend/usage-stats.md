@@ -118,15 +118,15 @@ provider + model + endpoint）/ `unrouted`（从未到达上游）。除 `unrout
 | `avgDurationMs` | overall, days, hours, targets, unrouted | 仅当前统计范围总计「延迟」（**不进表格**：端到端耗时被回答长度主导，拿来比较上游快慢会误导） |
 | `p50DurationMs` | overall, days, hours, targets, unrouted | 当前统计范围总计「延迟」50分位 |
 | `p95DurationMs` | overall, days, hours, targets, unrouted | 当前统计范围总计「延迟」95分位（**不进表格**，理由同 `avgDurationMs`） |
-| `avgTtftMs` | overall, days, hours, targets, unrouted | 目标表格「首字延迟」列；当前统计范围总计「延迟」首字延迟 |
-| `p95TtftMs` | overall, days, hours, targets, unrouted | 当前统计范围总计「延迟」首字延迟 95分位 |
-| `ttftSamples` | overall, days, hours, targets, unrouted | 当前统计范围总计「延迟」样本数；为 0 时上面两个首字延迟出口显示 `—` |
+| `avgTtftMs` | overall, days, hours, targets, unrouted | 目标表格「TTFT」列；当前统计范围总计「延迟」TTFT |
+| `p95TtftMs` | overall, days, hours, targets, unrouted | 当前统计范围总计「延迟」TTFT 95分位 |
+| `ttftSamples` | overall, days, hours, targets, unrouted | 当前统计范围总计「延迟」样本数；为 0 时上面两个 TTFT 出口显示 `—` |
 | `inputTokens` | overall, days, hours, targets, unrouted | 当前统计范围总计「token」输入 |
 | `outputTokens` | overall, days, hours, targets, unrouted | 当前统计范围总计「token」输出 |
 | `totalTokens` | overall, days, hours, targets, unrouted | 火花线（固定 `Token(近30天)`，标 `最小 / 最大 / 当前`）；当前统计范围总计「token」总 |
 | `cachedTokens` | overall, days, hours, targets, unrouted | 当前统计范围总计「token」缓存 |
 | `reasoningTokens` | overall, days, hours, targets, unrouted | 当前统计范围总计「token」推理 |
-| `outputTokensPerSecond` | overall, days, hours, targets, unrouted | 目标表格「输出速度」列；当前统计范围总计「吞吐」 |
+| `outputTokensPerSecond` | overall, days, hours, targets, unrouted | 目标表格「tok/s」列；当前统计范围总计「吞吐」 |
 | `truncations` | overall, days, hours, targets, unrouted | 当前统计范围总计「可靠性」 |
 | `contentFiltered` | overall, days, hours, targets, unrouted | 当前统计范围总计「可靠性」 |
 | `streamRequests` | overall, days, hours, targets, unrouted | 当前统计范围总计「吞吐」流式 |
@@ -142,14 +142,17 @@ provider + model + endpoint）/ `unrouted`（从未到达上游）。除 `unrout
 - **口径 / 列义说明**：目标表格下方固定两行灰色 dim 说明（`口径` / `列义`），文案在
   `src/tui/render.ts` 的 `STATS_GLOSSARY`，按 `；` 分句随面板宽度折行，窄终端不截断内容。
   口径与聚合层 `addToBucket` 完全一致：已结束的转发请求才计数；路由失败不计；中断只计请求数、
-  不计错误与耗时。列义解释表格数值（样本平均）/ `首字延迟` / `输出速度`（tok/s）的计算口径。
+  不计错误与耗时。列义解释 `TTFT`（首字延迟，第一个 token 到达，仅流式）与 `tok/s`
+  （输出速度 = 输出token÷解码时间，仅流式）这两个表头缩写的含义。
 - 火花线与统计范围**解耦**、固定不变：`Token(近30天) ▁▂▃ …  最小 {min} · 最大 {max} · 当前 {last}`，
   数据取 `days` 末尾 30 天（`totalTokens`），`days` 为空时显示 `—`。范围内无已完成请求时，
   数字区显示「范围内暂无已完成请求」；此时若范围内仍有未发出请求，追加 ` · 未发出 N`
   （未发出单独计数、不进 `overall`，所以空范围不等于「范围内什么都没发生」）。`近30天`
   的右边界仍受 `stats.retentionDays` 约束，过期文件在 daemon 启动时被清理。旧 daemon 无
   `windows` 时回退全期并提示「统计范围 全期（旧版 daemon 未提供范围数据）」。
-- 目标表格的列固定为 `供应商 / 模型 · [端点] · 请求 · 错误率 · 首字延迟 · 输出速度`（`[端点]` 为条件列，见下）：
+- 目标表格的列固定为 `供应商 / 模型 · [端点] · 请求 · 错误率 · TTFT · tok/s`（`[端点]` 为条件列，见下）：
+  表头保留 `TTFT` / `tok/s` 两个标准缩写，单位跟随数值（`ms` / `tok/s`），中文全称只在
+  `列义` 那行解释；**不要**为了“更好懂”把表头换成中文全称，那会挤掉标签列宽度。
   这里只放「一眼比较上游」需要的量。`p50` / `p95` / 分位类指标不进表格，只在当前窗口总计里出现。
   `routeKind` 不是维度，因此没有「路由」列，也没有按 routeKind
   过滤的过滤行（`f` 键已移除）。
@@ -157,7 +160,7 @@ provider + model + endpoint）/ `unrouted`（从未到达上游）。除 `unrout
   出现 ≥2 种 endpoint 时才考虑显示；显示条件还要宽度放得下（`width - 57 >= 20`，这里的 `width`
   是面板内容宽 = 终端宽 - 4，`renderTui` 的最小终端宽是 72，所以实际门槛是终端 ≥81 列）。两种布局的
   固定宽度分别是 40 / 57，`labelWidth = Math.max(width - 固定宽度, 8)`，窄终端优先保住
-  请求 / 错误率 / 首字延迟 / 输出速度，数值列不截断。
+  请求 / 错误率 / TTFT / tok/s，数值列不截断。
 - **大数显示**：计数类（`requests` / `errors` / `aborted` / `truncations` / `contentFiltered` /
   `streamRequests` / `nonStreamRequests` / `ttftSamples`）与 token 类（`inputTokens` / `outputTokens` /
   `totalTokens` / `cachedTokens` / `reasoningTokens`）统一走 `formatCount()`：`≥1000 → K`、
@@ -210,7 +213,7 @@ provider + model + endpoint）/ `unrouted`（从未到达上游）。除 `unrout
 - `test/stats-aggregate.test.ts`: grouping is `provider` + `model` + `endpoint` — two events that differ only by `routeKind` (`warp` + `overridden`) collapse into one target with summed counters; `unrouted` events never appear in `targets`; the `AggregateMetrics` field set equals the `aggregate-metrics-matrix` rows in this document (adding a metric without a matrix row and an outlet fails the build); cancelled (`client_aborted`) requests stay out of `avgDurationMs` / `p50` / `p95` while still counting toward `requests` / `aborted`; non-streaming requests produce no `outputTokensPerSecond` sample and an all-non-stream aggregate reports `null`; error rate, bucketed p50/p95 (assert the bucket edge, e.g. a lone 42 ms sample reports 50), token sums, `outputTokensPerSecond`, `unrouted` separation (routing failures never appear in `targets` / `days` / `hours`, and `overall.requests + unrouted.requests` equals the total), and that `snapshot` drops days outside the retention window (accumulator does not grow unbounded).
 - `test/routing-stats.test.ts`: `warp`, `explicit`, `overridden`, `unrouted`, and `/v1/models` producing no event; routeKinds are still recorded on the events (audit) but merge into a single target per upstream identity; `unrouted` excluded from every upstream view (no `unrouted` target exists at all) while `Aggregate.unrouted` still counts it, plus the two invariants above.
 - `test/proxy.test.ts`: SSE stays incremental — read with `res.body.getReader()` and assert the second chunk arrives **after** the first; `await res.text()` is not acceptable. Plus TTFT on first chunk, usage from the final chunk, and the no-usage fallback.
-- `test/tui.test.ts`: there is no filter row and no `路由` column any more; the 命中 line still prints `未发出 N` (the label is 「未发出」, not 「未路由」, because the bucket also holds local errors such as an unreadable body or a missing API key); the stats page has **no selection** (`↑`/`↓` are no-ops, no row highlight, no `↑↓` in the footer) and `h` cycles the five `STATS_WINDOWS`: `最近10条` / `近1小时` / `今天` / `近7天` / `近30天`, re-scoping the target table and the current-stats-range total only (a range with no completed request still prints its `未发出 N` count when non-zero); the `端点` column hides when every visible row shares one endpoint and appears when they differ; the table headers are `请求` / `错误率` / `首字延迟` / `输出速度` (no `平均` / `TTFT` / `tok/s` / `总耗时`) and neither end-to-end duration nor `p95` appears in the table; the detail panel is titled `当前统计范围总计`, is sourced from the current stats range's `overall`, and prints every `AggregateMetrics` field (`50分位` / `95分位` / 首字延迟 95分位 / stream / non-stream / total tokens included); the two dim `口径` / `列义` lines render below the table and wrap instead of being truncated at 72 columns; the footer never contains `换页` / `换区` and the model-page empty state drops `Enter 确认`; `formatCount()` folds counts and token sums into `K` / `M` / `G` (`999 → 999`, `1000 → 1K`, `31575899 → 31.6M`) while milliseconds and percentages stay raw; the sparkline is decoupled from the stats range and always renders the last 30 days of `aggregate.days` (`totalTokens`) with explicit `最小` / `最大` / `当前` values, and `restoreStatsView` keeps only `statsWindow` across a refresh; a legacy payload whose `targets` still carry `routeKind` parses and renders without error.
+- `test/tui.test.ts`: there is no filter row and no `路由` column any more; the 命中 line still prints `未发出 N` (the label is 「未发出」, not 「未路由」, because the bucket also holds local errors such as an unreadable body or a missing API key); the stats page has **no selection** (`↑`/`↓` are no-ops, no row highlight, no `↑↓` in the footer) and `h` cycles the five `STATS_WINDOWS`: `最近10条` / `近1小时` / `今天` / `近7天` / `近30天`, re-scoping the target table and the current-stats-range total only (a range with no completed request still prints its `未发出 N` count when non-zero); the `端点` column hides when every visible row shares one endpoint and appears when they differ; the table headers are `请求` / `错误率` / `TTFT` / `tok/s` (no `平均` / `总耗时`; the `列义` line explains the two abbreviations) and neither end-to-end duration nor `p95` appears in the table; the detail panel is titled `当前统计范围总计`, is sourced from the current stats range's `overall`, and prints every `AggregateMetrics` field (`50分位` / `95分位` / TTFT 95分位 / stream / non-stream / total tokens included); the two dim `口径` / `列义` lines render below the table and wrap instead of being truncated at 72 columns; the footer never contains `换页` / `换区` and the model-page empty state drops `Enter 确认`; `formatCount()` folds counts and token sums into `K` / `M` / `G` (`999 → 999`, `1000 → 1K`, `31575899 → 31.6M`) while milliseconds and percentages stay raw; the sparkline is decoupled from the stats range and always renders the last 30 days of `aggregate.days` (`totalTokens`) with explicit `最小` / `最大` / `当前` values, and `restoreStatsView` keeps only `statsWindow` across a refresh; a legacy payload whose `targets` still carry `routeKind` parses and renders without error.
 - `test/server.test.ts`: status snapshot carries `stats`; client abort mid-stream records `ok: false` / `status: null` / `termination: "client_aborted"` and none of it lands in `errors`; a disconnect after a terminal event records `ok: true` / `termination: "completed"`; an upstream stream error records `termination: "upstream_error"` and counts as an error; a Responses `response.failed` terminal records `ok: false`. Tests that assert on the persisted aggregate must reset `<CONFIG_DIR>/stats` first, because tests in one file share `CONFIG_DIR` and the JSONL record accumulates.
 
 ### 7. Wrong vs Correct

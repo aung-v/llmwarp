@@ -911,22 +911,22 @@ test("统计页渲染按天火花线与当前窗口目标表，且不泄露密�
   // 详情区固定为「当前统计范围总计」，数据源是当前窗口 overall。
   assert.match(output, /当前统计范围总计/);
   assert.match(output, /延迟   平均总耗时 473ms · 50分位 300ms · 95分位 1000ms/);
-  assert.match(output, /首字延迟 200ms · 95分位 200ms · 样本 1/);
+  assert.match(output, /TTFT 200ms · 95分位 200ms · 样本 1/);
   assert.match(output, /可靠性 请求 3 · 错误 1（33%）· 中断 0 · 截断 0 · 拦截 0/);
   // 口径 / 列义两条说明都在。
   assert.match(output, /口径  已结束的转发请求；/);
   assert.match(output, /列义  表内数值 = 各上游在当前统计范围的样本平均；/);
-  assert.match(output, /输出速度 = 输出token÷解码时间/);
+  assert.match(output, /tok\/s = 输出速度（输出token÷解码时间，仅流式）/);
   assert.match(output, /ark\/glm-5\.3-flash/);
   assert.match(output, /ark\/glm-5\.3-pro/);
-  // 表头用新列名，不再出现旧列名。
+  // 表头保留 TTFT / tok/s 缩写（值自带 `ms` / `tok/s` 单位），不再出现被删掉的「总耗时」。
   const header = output.split("\n").find((line) => line.includes("供应商 / 模型")) ?? "";
   assert.doesNotMatch(header, /总耗时/);
-  assert.match(header, /首字延迟/);
-  assert.match(header, /输出速度/);
+  assert.match(header, /TTFT/);
+  assert.match(header, /tok\/s/);
   assert.doesNotMatch(header, /平均/);
-  assert.doesNotMatch(header, /TTFT/);
-  assert.doesNotMatch(header, /tok\/s/);
+  assert.doesNotMatch(header, /首字延迟/);
+  assert.doesNotMatch(header, /输出速度/);
   // 统计只按上游身份展示：没有路由列 / 过滤行，未发出的计数仍在命中行。
   assert.doesNotMatch(output, /被开关覆盖/);
   assert.doesNotMatch(output, /路由\s+请求/);
@@ -937,7 +937,7 @@ test("统计页渲染按天火花线与当前窗口目标表，且不泄露密�
   assert.doesNotMatch(output, /secret-key/);
 });
 
-test("统计页显示中断数并按目标渲染首字延迟列（无样本显示 —）", () => {
+test("统计页显示中断数并按目标渲染 TTFT 列（无样本显示 —）", () => {
   const accumulator = new AggregateAccumulator();
   const sample = sampleStatsEvents();
   const events: RequestEvent[] = [
@@ -965,7 +965,7 @@ test("统计页显示中断数并按目标渲染首字延迟列（无样本显�
   const output = renderTui(state, { height: 30, width: 90 });
 
   assert.match(output, /中断 1/);
-  assert.match(output, /首字延迟/);
+  assert.match(output, /TTFT/);
   assert.match(output, /120ms/);
   assert.match(output, /—/);
   for (const line of output.split("\n").filter((row) => /^[╭│╰]/.test(row))) {
@@ -973,7 +973,7 @@ test("统计页显示中断数并按目标渲染首字延迟列（无样本显�
   }
 });
 
-test("统计页无首字延迟样本时总计显示 — 而不是 0ms", () => {
+test("统计页无 TTFT 样本时总计显示 — 而不是 0ms", () => {
   const accumulator = new AggregateAccumulator();
   const sample = sampleStatsEvents();
   // 只喂非流式事件（ttftMs 恒为 null）→ overall.ttftSamples === 0。
@@ -990,8 +990,8 @@ test("统计页无首字延迟样本时总计显示 — 而不是 0ms", () => {
   );
   const output = renderTui(state, { height: 30, width: 90 });
 
-  assert.match(output, /首字延迟 — · 95分位 — · 样本 0/);
-  assert.doesNotMatch(output, /首字延迟 0ms/);
+  assert.match(output, /TTFT — · 95分位 — · 样本 0/);
+  assert.doesNotMatch(output, /TTFT 0ms/);
 });
 
 test("统计页不再有选中态：↑↓ 无操作，页脚不出现 ↑↓", () => {
@@ -1053,8 +1053,8 @@ test("统计页当前统计范围总计覆盖延迟 / 吞吐 / token / 可靠性
 
   assert.match(output, /当前统计范围总计/);
   assert.match(output, /延迟   平均总耗时 473ms · 50分位 300ms · 95分位 1000ms/);
-  assert.match(output, /首字延迟 200ms · 95分位 200ms · 样本 1/);
-  assert.match(output, /吞吐   输出速度 25 tok\/s · 流式 1 · 非流式 2/);
+  assert.match(output, /TTFT 200ms · 95分位 200ms · 样本 1/);
+  assert.match(output, /吞吐   25 tok\/s · 流式 1 · 非流式 2/);
   assert.match(output, /token\s+输入 110 · 输出 220 · 总 330 · 缓存 50 · 推理 5/);
   assert.match(output, /可靠性 请求 3 · 错误 1（33%）· 中断 0 · 截断 0 · 拦截 0/);
 
@@ -1176,11 +1176,11 @@ test("统计页窄窗口下优先保留口径说明与当前窗口总计并报�
   assert.match(output, /口径  已结束的转发请求；/);
   assert.match(output, /中断只计请求数，不计错误与耗时/);
   assert.match(output, /列义  表内数值 = 各上游在当前统计范围的样本平均；/);
-  assert.match(output, /输出速度 = 输出token÷解码时间/);
+  assert.match(output, /tok\/s = 输出速度（输出token÷解码时间，仅流式）/);
   assert.match(output, /当前统计范围总计/);
   assert.match(output, /延迟   平均总耗时 473ms · 50分位 300ms · 95分位 1000ms/);
-  assert.match(output, /首字延迟 200ms · 95分位 200ms · 样本 1/);
-  assert.match(output, /吞吐   输出速度 25 tok\/s · 流式 1 · 非流式 2/);
+  assert.match(output, /TTFT 200ms · 95分位 200ms · 样本 1/);
+  assert.match(output, /吞吐   25 tok\/s · 流式 1 · 非流式 2/);
   assert.match(output, /推理 5/);
   assert.match(output, /可靠性 请求 3 · 错误 1（33%）· 中断 0 · 截断 0 · 拦截 0/);
   // 表格确实让位并报告隐藏行数（短终端下表格一行都放不下）。
@@ -1204,19 +1204,19 @@ test("formatCount 把大数折算成 K / M / G", () => {
   assert.equal(formatCount(999950000), "1G");
 });
 
-test("统计页表头用「首字延迟 / 输出速度」，总耗时 / p95 / p50 只留在当前统计范围总计", () => {
+test("统计页表头用 TTFT / tok/s，总耗时 / p95 / p50 只留在当前统计范围总计", () => {
   const state = openPage(createTuiState(buildCatalog(config), statsStatus), "stats");
   const output = renderTui(state, { height: 34, width: 100 });
   const header = output.split("\n").find((line) => line.includes("供应商 / 模型")) ?? "";
 
   assert.doesNotMatch(header, /总耗时/);
-  assert.match(header, /首字延迟/);
-  assert.match(header, /输出速度/);
+  assert.match(header, /TTFT/);
+  assert.match(header, /tok\/s/);
   assert.doesNotMatch(header, /平均/);
-  assert.doesNotMatch(header, /TTFT/);
-  assert.doesNotMatch(header, /tok\/s/);
+  assert.doesNotMatch(header, /首字延迟/);
+  assert.doesNotMatch(header, /输出速度/);
   assert.doesNotMatch(header, /p95/);
-  assert.match(output, /输出速度 25 tok\/s/, "总计里能看到输出速度与单位");
+  assert.match(output, /25 tok\/s/, "总计里能看到输出速度与单位");
   assert.match(output, /95分位 1000ms/);
   assert.match(output, /95分位 200ms · 样本 1/);
   assert.doesNotMatch(output, /p50|p95/);

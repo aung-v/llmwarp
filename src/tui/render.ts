@@ -423,8 +423,8 @@ function statsTotalRows(overall: AggregateMetrics): string[] {
     "",
     pc.bold("当前统计范围总计"),
     `  延迟   平均总耗时 ${overall.avgDurationMs}ms · 50分位 ${overall.p50DurationMs}ms · 95分位 ${overall.p95DurationMs}ms`,
-    `         首字延迟 ${hasTtft ? `${overall.avgTtftMs}ms` : "—"} · 95分位 ${hasTtft ? `${overall.p95TtftMs}ms` : "—"} · 样本 ${formatCount(overall.ttftSamples)}`,
-    `  吞吐   输出速度 ${formatRate(overall.outputTokensPerSecond)} tok/s · 流式 ${formatCount(overall.streamRequests)} · 非流式 ${formatCount(overall.nonStreamRequests)}`,
+    `         TTFT ${hasTtft ? `${overall.avgTtftMs}ms` : "—"} · 95分位 ${hasTtft ? `${overall.p95TtftMs}ms` : "—"} · 样本 ${formatCount(overall.ttftSamples)}`,
+    `  吞吐   ${formatRate(overall.outputTokensPerSecond)} tok/s · 流式 ${formatCount(overall.streamRequests)} · 非流式 ${formatCount(overall.nonStreamRequests)}`,
     `  token  输入 ${formatCount(overall.inputTokens)} · 输出 ${formatCount(overall.outputTokens)} · 总 ${formatCount(overall.totalTokens)} · 缓存 ${formatCount(overall.cachedTokens)} · 推理 ${formatCount(overall.reasoningTokens)}`,
     `  可靠性 请求 ${formatCount(overall.requests)} · 错误 ${formatCount(overall.errors)}（${percent(overall.errorRate)}）· 中断 ${formatCount(overall.aborted)} · 截断 ${formatCount(overall.truncations)} · 拦截 ${formatCount(overall.contentFiltered)}`,
   ];
@@ -436,7 +436,7 @@ function statsTotalRows(overall: AggregateMetrics): string[] {
  */
 const STATS_GLOSSARY = [
   "口径  已结束的转发请求；进行中、路由失败不计；中断只计请求数，不计错误与耗时",
-  "列义  表内数值 = 各上游在当前统计范围的样本平均；首字延迟 = 第一个 token 到达（仅流式）；输出速度 = 输出token÷解码时间，单位 tok/s（仅流式）",
+  "列义  表内数值 = 各上游在当前统计范围的样本平均；TTFT = 首字延迟（第一个 token 到达，仅流式）；tok/s = 输出速度（输出token÷解码时间，仅流式）",
 ];
 
 /** 按 `；` 分句贪心折行到 `width`，宁可多占一行也不截断内容。 */
@@ -536,23 +536,26 @@ function statsRows(state: TuiState, height: number, width: number): string[] {
     ),
   );
 
-  // 表格列：供应商 / 模型 · [端点] · 请求 · 错误率 · 首字延迟 · 输出速度。
+  // 表格列：供应商 / 模型 · [端点] · 请求 · 错误率 · TTFT · tok/s。
   // 总耗时（端到端）不进表格：它被回答长度主导，拿来比上游快慢会误导；p50 / p95 同理。
-  // 这三者都只留在「当前统计范围总计」块里。
+  // 这三者都只留在「当前统计范围总计」块里。表头保留 TTFT / tok/s 两个标准缩写，单位跟着数值走
+  // （`200ms` / `25 tok/s`），中文全称交给 `列义` 那行解释，不占表格宽度。
   // 「端点」列只有在可见行端点多于一个、且宽度放得下时才出现；窄终端优先保住数值列。
   const endpointWidth = 16;
   const visibleTargets = targets.slice(0, shown);
   const hasMixedEndpoints = new Set(visibleTargets.map((target) => target.endpoint)).size > 1;
-  // 端点列要多花 17 列；只有端点多于一个、且标签列仍能保持 20 列以上时才值得显示，
-  // 否则窄终端优先保住 请求 / 错误率 / 首字延迟 / 输出速度 这些数值列。
+  // 数值列固定宽度：请求 6 + 错误率 7 + TTFT 6 + tok/s 7 加 4 个分隔符 = 30 列。
+  // 端点列要多花 17 列（16 + 分隔符），因此只有端点多于一个、且宽度放得下
+  // （`width - 50 >= 20`，给标签列留 23 列以上）时才显示；否则窄终端优先保住
+  // 请求 / 错误率 / TTFT / tok/s 这些数值列。
   const showEndpoint = hasMixedEndpoints && width - 50 >= 20;
-  const labelWidth = Math.max(width - (showEndpoint ? 50 : 33), 8);
+  const labelWidth = Math.max(width - (showEndpoint ? 47 : 30), 8);
   if (targets.length === 0) {
     rows.push("", pc.dim("暂无上游目标"));
   } else if (tableSpace >= 1) {
     rows.push(
       pc.bold(
-        `${pad("供应商 / 模型", labelWidth)} ${showEndpoint ? `${pad("端点", endpointWidth)} ` : ""}${rightAlign("请求", 6)} ${rightAlign("错误率", 7)} ${rightAlign("首字延迟", 8)} ${rightAlign("输出速度", 8)}`,
+        `${pad("供应商 / 模型", labelWidth)} ${showEndpoint ? `${pad("端点", endpointWidth)} ` : ""}${rightAlign("请求", 6)} ${rightAlign("错误率", 7)} ${rightAlign("TTFT", 6)} ${rightAlign("tok/s", 7)}`,
       ),
       pc.dim("─".repeat(Math.max(width, 10))),
     );
@@ -560,7 +563,7 @@ function statsRows(state: TuiState, height: number, width: number): string[] {
       // 旧载荷可能仍带 provider 为空的目标（新代码不再产生）；标签统一用「未发出」。
       const label = `${sanitize(target.provider ?? "未发出")}/${sanitize(target.model ?? "—")}`;
       const ttft = target.ttftSamples > 0 ? `${target.avgTtftMs}ms` : "—";
-      const line = `${pad(label, labelWidth)} ${showEndpoint ? `${pad(shortEndpoint(sanitize(target.endpoint)), endpointWidth)} ` : ""}${rightAlign(formatCount(target.requests), 6)} ${rightAlign(percent(target.errorRate), 7)} ${rightAlign(ttft, 8)} ${rightAlign(formatRate(target.outputTokensPerSecond), 8)}`;
+      const line = `${pad(label, labelWidth)} ${showEndpoint ? `${pad(shortEndpoint(sanitize(target.endpoint)), endpointWidth)} ` : ""}${rightAlign(formatCount(target.requests), 6)} ${rightAlign(percent(target.errorRate), 7)} ${rightAlign(ttft, 6)} ${rightAlign(formatRate(target.outputTokensPerSecond), 7)}`;
       rows.push(line);
     });
   }
