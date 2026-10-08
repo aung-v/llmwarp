@@ -655,3 +655,40 @@ Follow-up to the stats feature, done outside a Trellis task at the user's reques
 ### Next Steps
 
 - 已知取舍：表内 输出速度 只给数字，单位 tok/s 写在列义里；若要表内直接带单位需再收窄其他列
+
+
+## Session 22: 实时请求活动面板：去掉重复 RPM，写明平均耗时与本次运行
+<!-- trellis-session: v=2 fp=16f3a9267b273a2f -->
+
+**Date**: 2026-10-08
+**Task**: 实时请求活动面板：去掉重复 RPM，写明平均耗时与本次运行
+**Branch**: `master`
+
+### Summary
+
+右侧反馈/请求活动面板把 requestsPerMinute 与 requestsLastMinute（同一 60 秒窗口同一值）重复显示为 RPM 和 60秒，且「平均」「总计」口径不明。改为三行（近60秒请求/错误、平均耗时、本次运行请求/错误），计数改用 formatCount 折算以避免 72 列右栏（内宽 33）截断。metrics.ts 采集与载荷字段未动；README 与 frontend spec 同步。
+
+### Main Changes
+
+- 面板去掉 RPM（与「近60秒 请求」重复），改三行：近60秒 请求/错误 · 平均耗时 · 本次运行 请求/错误
+- 计数走 formatCount 折算 K/M/G（与统计页同一口径），修复 72 列终端下大数被截断；check 子代理发现并补了宽度回归测试
+- README 与 .trellis/spec/frontend/interaction-guidelines 说明面板是内存 60 秒实时窗口、与统计页落盘历史无关，且不得再渲染 RPM
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5299260` | fix(tui): 实时面板去掉重复的 RPM，说清平均耗时与「本次运行」 |
+
+### Testing
+
+- [OK] [OK] npm run typecheck / npm test（187 pass）/ npm run build 全绿；版本仍 1.2.0
+- [OK] [OK] 独立 check 子代理在 72/80/90/100 列 × 12~34 行、含大数与长事件下确认无截断、帧不变量成立；发现并修复 1 处宽度 bug
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 面板指标行排在反馈事件之后，长反馈会先把指标行挤出面板（既有行为，非本次引入）

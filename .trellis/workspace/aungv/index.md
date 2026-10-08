@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 21
+- **Total Sessions**: 22
 - **Last Active**: 2026-10-08
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~657 | Active |
+| `journal-1.md` | ~694 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 22 | 2026-10-08 | 实时请求活动面板：去掉重复 RPM，写明平均耗时与本次运行 | `5299260` | `master` |
 | 21 | 2026-10-08 | 统计页口径与列义讲清楚：删总耗时列、窗口改统计范围、详情改成范围总计 | `55d4e76` | `master` |
 | 20 | 2026-10-08 | 版本升到 1.2.0，VERSION 单一来源 package.json | `b513f71` | `master` |
 | 19 | 2026-10-08 | TUI 三个反馈修复：模式命名、供应商删除、统计时效性 | `a2d2d98`, `3d06f31` | `master` |
