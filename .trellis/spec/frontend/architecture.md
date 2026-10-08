@@ -12,7 +12,7 @@ src/searchCheckbox.ts   # Custom searchable checkbox prompt
 src/config.ts           # Source of truth for providers and active selection
 src/daemon.ts           # Daemon process state and admin API client
 src/tui/index.ts        # Persistent TUI process: key handling, refresh loop, config write then daemon sync
-src/tui/model.ts        # TUI view state (catalog, selection, confirm intent, stats window/selection) and status parsing
+src/tui/model.ts        # TUI view state (catalog, selection, confirm intent, stats window) and status parsing
 src/tui/render.ts       # Pure panel/footer rendering for the TUI
 ```
 
@@ -33,7 +33,7 @@ If a persistent TUI dashboard is added, keep it as a terminal frontend process t
 ## TUI Pages, Focus, and Confirmations
 
 - `TuiState.page` (`"models" | "routing" | "providers" | "stats"`) selects the left-hand list; `TuiState.focus` (`"nav" | "list" | "daemon"`) selects the active region. The daemon panel owns the restart/start button, so a restart can only start from `focus === "daemon"`.
-- The `统计` page is read-only: it renders the historical aggregate from `GET /_llmwarp/status` (`stats.aggregate`) as a decoupled sparkline (last 30 days of daily tokens with `最小 / 最大 / 当前`), a window-scoped summary + per-upstream-target table (`aggregate.windows`, the five `STATS_WINDOWS`; `h` cycles them), and a detail panel that must expose every `AggregateMetrics` field for the selected row. It never writes config and never owns provider/daemon state. Missing or disabled stats render an empty-state message instead of an error, and a payload without `windows` degrades to the all-time view.
+- The `统计` page is read-only and has no selection: it renders the historical aggregate from `GET /_llmwarp/status` (`stats.aggregate`) as a decoupled sparkline (last 30 days of daily tokens with `最小 / 最大 / 当前`), a range-scoped per-upstream-target table (`aggregate.windows`, the five `STATS_WINDOWS`; `h` cycles them), the two `口径` / `列义` glossary lines, and a `当前统计范围总计` block sourced from the current range's `overall` that must expose every `AggregateMetrics` field. It never writes config and never owns provider/daemon state. Missing or disabled stats render an empty-state message instead of an error, and a payload without `windows` degrades to the all-time view.
 - `TuiState.confirming` is an intent enum (`null | "switch" | "routing" | "restart" | "provider-action" | "remove-provider"`), never a boolean. Render and key dispatch branch on the intent so two confirmations can never consume each other's `Enter`. `provider-action` is the provider page's overlay menu; while it is open only `↑`/`↓` (move) and `Enter`/`Esc` act, so the two-step delete always targets the provider row the menu was opened on.
 - Adding a new TUI write action means adding an intent plus its own `begin*`/`confirm*` pair; do not overload an existing intent.
 - The TUI never owns the daemon lifecycle: the restart action calls the existing `stopDaemon()` / `startDaemon()` from `src/daemon.ts` after explicit confirmation, and `src/tui/model.ts` stays pure view state.

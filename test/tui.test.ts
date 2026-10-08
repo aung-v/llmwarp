@@ -25,9 +25,7 @@ import {
   restoreStatsView,
   selectedProvider,
   selectedProviderAction,
-  selectedStatsIndex,
-  selectedStatsTarget,
-  statsTargets,
+  statsWindowData,
   toggleStatsWindow,
   TUI_PAGES,
   type StatusSnapshot,
@@ -61,7 +59,7 @@ const config: Config = {
   },
 };
 
-/** 走真实键位路径切到路由页：← 到导航栏 → → 换页 → ↓ 把焦点落回列表。 */
+/** 走真实键位路径切到路由页：← 到导航栏 → → 切页面 → ↓ 把焦点落回列表。 */
 function openRoutingPage(state: TuiState): TuiState {
   return moveSelection(focusNext(focusPrev(state)), 1);
 }
@@ -125,7 +123,7 @@ test("TUI 选择有边界且确认可以取消", () => {
   assert.equal(state.confirming, null);
 });
 
-test("导航栏 ←→ 换页，↑↓ 把焦点落回列表", () => {
+test("导航栏 ←→ 切页面，↑↓ 把焦点落回列表", () => {
   let state = createTuiState(buildCatalog(config), status);
   state = focusPrev(state);
   assert.equal(state.focus, "nav");
@@ -188,7 +186,7 @@ test("渲染包含状态且不泄露密钥", () => {
   assert.match(output, /http:\/\/127\.0\.0\.1:8787\/v1/);
   assert.match(output, /ark\/glm-5\.3-flash/);
   assert.match(output, /当前激活/);
-  assert.match(output, /↑↓ 选中/);
+  assert.match(output, /↑↓ 选择/);
   assert.match(output, /\[ 模型 \]/);
   assert.match(output, /\[ 模式 \]/);
   assert.match(output, /2026-09-27T00:00:00\.000Z/);
@@ -345,7 +343,7 @@ test("面板补空格时保留行内颜色", () => {
 // 残留（假「处理中」）和确认框弹出时的整屏错位才不会出现。
 test("整帧重绘要求矩形：每行等宽且不超 height，导航提示 / 处理中 / 结束后都不留尾巴", () => {
   const base = createTuiState(buildCatalog(config), status);
-  const navFocus = focusPrev(base); // 焦点到导航栏，表头出现「←→ 换页  ↑↓ 进入列表」
+  const navFocus = focusPrev(base); // 焦点到导航栏，表头出现「←→ 切页面  ↑↓ 进入列表」
   const switching = beginSwitch(beginSwitchConfirm(navFocus));
   assert.ok(switching, "确认态下应能进入切换在途状态");
   const daemonFocus = focusNext(base); // 焦点落到守护进程栏，无导航栏提示
@@ -564,15 +562,12 @@ test("buildCatalog 不把非法的 active 模型加入可切换列表", () => {
   assert.deepEqual(entries.map((entry) => entry.label), ["ark/good-model"]);
 });
 
-test("页脚只提示基础按键，不再出现 m 或 y/n 动作键", () => {
+test("页脚只提示基础按键，且统一「选择 / 切换 / Esc 返回」措辞", () => {
   const output = renderTui(createTuiState(buildCatalog(config), status), { height: 24, width: 80 });
 
-  assert.match(output, /↑↓ 选中/);
-  assert.match(output, /←→ 换区\/换页/);
-  assert.match(output, /Enter 确认/);
-  assert.match(output, /Esc 取消/);
-  assert.match(output, /r 刷新/);
-  assert.match(output, /q 退出/);
+  assert.match(output, /↑↓ 选择 · Enter 切换 · ←→ 切页面\/左右栏 · Esc 返回 · r 刷新 · q 退出/);
+  // 全 TUI 不再出现「换页」「换区」两个词。
+  assert.doesNotMatch(output, /换页|换区/);
   assert.doesNotMatch(output, /m 切换路由模式/);
   assert.doesNotMatch(output, /y 确认/);
 });
@@ -877,33 +872,47 @@ test("重启动作结束后必须清除「处理中」并留下成功事件", ()
   assert.match(finished, /已重启 daemon/);
 });
 
-test("统计页渲染按天火花线与 provider 切片，且不泄露密钥", () => {
+test("统计页渲染按天火花线与当前窗口目标表，且不泄露密钥", () => {
   const state = openPage(createTuiState(buildCatalog(config), statsStatus), "stats");
-  const output = renderTui(state, { height: 30, width: 90 });
+  const output = renderTui(state, { height: 34, width: 100 });
 
   assert.match(output, /用量统计/);
   assert.match(output, /\[ 统计 \]/);
-  assert.match(output, /窗口 最近10条 · 已完成请求 · 进行中不计/);
+  assert.match(output, /统计范围 最近10条 · 只算已结束的转发请求/);
   assert.match(output, /Token\(近30天\)/);
   assert.match(output, /[\u2581-\u2588]/);
   // 火花线固定最近 30 天 token 趋势，并标出最小 / 最大 / 当前。
   assert.match(output, /最小 30 · 最大 300 · 当前 30/);
-  assert.match(output, /汇总\s+请求 3/);
-  assert.match(output, /中断 0/);
-  assert.match(output, /TTFT/);
-  assert.match(output, /TTFT 平均 200ms/);
+  // 详情区固定为「当前统计范围总计」，数据源是当前窗口 overall。
+  assert.match(output, /当前统计范围总计/);
+  assert.match(output, /延迟   平均总耗时 473ms · 50分位 300ms · 95分位 1000ms/);
+  assert.match(output, /首字延迟 200ms · 95分位 200ms · 样本 1/);
+  assert.match(output, /可靠性 请求 3 · 错误 1（33%）· 中断 0 · 截断 0 · 拦截 0/);
+  // 口径 / 列义两条说明都在。
+  assert.match(output, /口径  已结束的转发请求；/);
+  assert.match(output, /列义  表内数值 = 各上游在当前统计范围的样本平均；/);
+  assert.match(output, /输出速度 = 输出token÷解码时间/);
   assert.match(output, /ark\/glm-5\.3-flash/);
-  assert.match(output, /chat\/completions/);
+  assert.match(output, /ark\/glm-5\.3-pro/);
+  // 表头用新列名，不再出现旧列名。
+  const header = output.split("\n").find((line) => line.includes("供应商 / 模型")) ?? "";
+  assert.doesNotMatch(header, /总耗时/);
+  assert.match(header, /首字延迟/);
+  assert.match(header, /输出速度/);
+  assert.doesNotMatch(header, /平均/);
+  assert.doesNotMatch(header, /TTFT/);
+  assert.doesNotMatch(header, /tok\/s/);
   // 统计只按上游身份展示：没有路由列 / 过滤行，未发出的计数仍在命中行。
   assert.doesNotMatch(output, /被开关覆盖/);
   assert.doesNotMatch(output, /路由\s+请求/);
   assert.doesNotMatch(output, /过滤/);
-  assert.doesNotMatch(output, /路由失败/);
+  // 「路由失败」只作为口径说明出现，不再是路由维度或独立分区。
+  assert.match(output, /口径[\s\S]*路由失败/);
   assert.match(output, /未发出/);
   assert.doesNotMatch(output, /secret-key/);
 });
 
-test("统计页显示中断数并按目标渲染 TTFT 列（无样本显示 —）", () => {
+test("统计页显示中断数并按目标渲染首字延迟列（无样本显示 —）", () => {
   const accumulator = new AggregateAccumulator();
   const sample = sampleStatsEvents();
   const events: RequestEvent[] = [
@@ -931,7 +940,7 @@ test("统计页显示中断数并按目标渲染 TTFT 列（无样本显示 —�
   const output = renderTui(state, { height: 30, width: 90 });
 
   assert.match(output, /中断 1/);
-  assert.match(output, /TTFT/);
+  assert.match(output, /首字延迟/);
   assert.match(output, /120ms/);
   assert.match(output, /—/);
   for (const line of output.split("\n").filter((row) => /^[╭│╰]/.test(row))) {
@@ -939,7 +948,7 @@ test("统计页显示中断数并按目标渲染 TTFT 列（无样本显示 —�
   }
 });
 
-test("统计页无 TTFT 样本时汇总行显示 — 而不是 0ms", () => {
+test("统计页无首字延迟样本时总计显示 — 而不是 0ms", () => {
   const accumulator = new AggregateAccumulator();
   const sample = sampleStatsEvents();
   // 只喂非流式事件（ttftMs 恒为 null）→ overall.ttftSamples === 0。
@@ -956,56 +965,52 @@ test("统计页无 TTFT 样本时汇总行显示 — 而不是 0ms", () => {
   );
   const output = renderTui(state, { height: 30, width: 90 });
 
-  assert.match(output, /TTFT 平均 —/);
-  assert.doesNotMatch(output, /TTFT 平均 0ms/);
+  assert.match(output, /首字延迟 — · 95分位 — · 样本 0/);
+  assert.doesNotMatch(output, /首字延迟 0ms/);
 });
 
-test("统计页 ↑↓ 在目标表格里移动选中行且不越界", () => {
-  let state = openPage(createTuiState(buildCatalog(config), statsStatus), "stats");
-  assert.equal(state.statsSelected, 0);
-  assert.equal(selectedStatsTarget(state)?.model, "glm-5.3-flash");
-  assert.equal(selectedStatsIndex(state, 2), 0);
+test("统计页不再有选中态：↑↓ 无操作，页脚不出现 ↑↓", () => {
+  const state = openPage(createTuiState(buildCatalog(config), statsStatus), "stats");
+  assert.equal(moveSelection(state, 1), state);
+  assert.equal(moveSelection(state, -1), state);
 
-  state = moveSelection(state, 1);
-  assert.equal(state.statsSelected, 1);
-  assert.equal(selectedStatsTarget(state)?.model, "glm-5.3-pro");
-
-  state = moveSelection(state, 10);
-  assert.equal(state.statsSelected, 1, "越界收敛到末行");
-  state = moveSelection(state, -10);
-  assert.equal(state.statsSelected, 0);
-  assert.equal(selectedStatsIndex(state, 0), -1);
-  assert.equal(selectedStatsTarget({ ...state, status: null }), null);
+  const output = renderTui(state, { height: 34, width: 100 });
+  assert.doesNotMatch(output, /↑↓/);
+  // 没有蓝底行高亮（选中态已删除）。
+  assert.doesNotMatch(output, /\u001B\[44m/);
+  // 表格与总计照常渲染。
+  assert.match(output, /ark\/glm-5\.3-flash/);
+  assert.match(output, /当前统计范围总计/);
 });
 
-test("统计页 h 在 5 个窗口间循环，汇总与表格随窗口重算", () => {
+test("统计页 h 在 5 个窗口间循环，总计与表格随窗口重算", () => {
   let state = openPage(createTuiState(buildCatalog(config), statsStatus), "stats");
   assert.equal(state.statsWindow, "recent10");
   const recentOutput = renderTui(state, { height: 34, width: 100 });
-  assert.match(recentOutput, /窗口 最近10条 · 已完成请求 · 进行中不计/);
-  assert.match(recentOutput, /汇总\s+请求 3/);
+  assert.match(recentOutput, /统计范围 最近10条 · 只算已结束的转发请求/);
+  assert.match(recentOutput, /可靠性 请求 3 · 错误 1/);
 
   // 近1小时：样例事件都完成于 11:00 前 → 空窗口。
   state = toggleStatsWindow(state, 1);
   assert.equal(state.statsWindow, "hour1");
   const hourOutput = renderTui(state, { height: 34, width: 100 });
-  assert.match(hourOutput, /窗口 近1小时/);
-  assert.match(hourOutput, /窗口内暂无已完成请求/);
+  assert.match(hourOutput, /统计范围 近1小时/);
+  assert.match(hourOutput, /范围内暂无已完成请求/);
 
   // 今天：只含 09-27 的两条路由事件（unrouted 不算）。
   state = toggleStatsWindow(state, 1);
   assert.equal(state.statsWindow, "today");
   const todayOutput = renderTui(state, { height: 34, width: 100 });
-  assert.match(todayOutput, /窗口 今天/);
-  assert.match(todayOutput, /汇总\s+请求 2/);
+  assert.match(todayOutput, /统计范围 今天/);
+  assert.match(todayOutput, /可靠性 请求 2 · 错误 1（50%）/);
 
   // 近7天 / 近30天：都含 09-26 + 09-27 的三条。
   state = toggleStatsWindow(state, 1);
   assert.equal(state.statsWindow, "week7");
-  assert.match(renderTui(state, { height: 34, width: 100 }), /窗口 近7天/);
+  assert.match(renderTui(state, { height: 34, width: 100 }), /统计范围 近7天/);
   state = toggleStatsWindow(state, 1);
   assert.equal(state.statsWindow, "month30");
-  assert.match(renderTui(state, { height: 34, width: 100 }), /汇总\s+请求 3/);
+  assert.match(renderTui(state, { height: 34, width: 100 }), /可靠性 请求 3 · 错误 1/);
 
   // 循环回最近10条；反向循环到 month30。
   state = toggleStatsWindow(state, 1);
@@ -1017,35 +1022,31 @@ test("统计页 h 在 5 个窗口间循环，汇总与表格随窗口重算", ()
   assert.equal(toggleStatsWindow(modelsState, 1), modelsState);
 });
 
-test("统计页选中目标详情覆盖延迟 / 吞吐 / token / 可靠性全部指标", () => {
+test("统计页当前统计范围总计覆盖延迟 / 吞吐 / token / 可靠性全部指标", () => {
   const state = openPage(createTuiState(buildCatalog(config), statsStatus), "stats");
   const output = renderTui(state, { height: 34, width: 100 });
 
-  assert.match(output, /选中详情\s+ark\/glm-5\.3-flash · chat\/completions/);
-  assert.match(output, /平均 560ms · 50分位 150ms · 95分位 1000ms/);
-  assert.match(output, /TTFT 平均 200ms · TTFT 95分位 200ms · 样本 1/);
-  assert.match(output, /吞吐\s+25 tok\/s · 流式 1 · 非流式 1/);
+  assert.match(output, /当前统计范围总计/);
+  assert.match(output, /延迟   平均总耗时 473ms · 50分位 300ms · 95分位 1000ms/);
+  assert.match(output, /首字延迟 200ms · 95分位 200ms · 样本 1/);
+  assert.match(output, /吞吐   输出速度 25 tok\/s · 流式 1 · 非流式 2/);
   assert.match(output, /token\s+输入 110 · 输出 220 · 总 330 · 缓存 50 · 推理 5/);
-  assert.match(output, /可靠性 请求 2 · 错误 0（0%）· 中断 0 · 截断 0 · 拦截 0/);
+  assert.match(output, /可靠性 请求 3 · 错误 1（33%）· 中断 0 · 截断 0 · 拦截 0/);
 
-  // 选中行变化后详情跟随（第二个目标是另一个上游 model）。
-  const movedOutput = renderTui(moveSelection(state, 1), { height: 34, width: 100 });
-  assert.match(movedOutput, /选中详情\s+ark\/glm-5\.3-pro · chat\/completions/);
-  assert.match(movedOutput, /平均 300ms · 50分位 300ms · 95分位 300ms/);
-  assert.match(movedOutput, /TTFT 平均 — · TTFT 95分位 — · 样本 0/);
-  assert.match(movedOutput, /吞吐\s+— tok\/s · 流式 0 · 非流式 1/);
-  assert.match(movedOutput, /可靠性 请求 1 · 错误 1（100%）· 中断 0 · 截断 0 · 拦截 0/);
+  // 总计固定为「当前统计范围」，切窗口后随窗口重算而不是跟随某个上游。
+  const today = toggleStatsWindow(toggleStatsWindow(state, 1), 1);
+  const todayOutput = renderTui(today, { height: 34, width: 100 });
+  assert.match(todayOutput, /当前统计范围总计/);
+  assert.match(todayOutput, /可靠性 请求 2 · 错误 1（50%）/);
 });
 
-test("自动刷新恢复统计页视图状态，并按身份重定位选中目标", () => {
+test("自动刷新恢复统计页的当前统计范围", () => {
   const before = {
     ...openPage(createTuiState(buildCatalog(config), statsStatus), "stats"),
     statsWindow: "week7" as const,
-    statsSelected: 0,
   };
-  assert.equal(selectedStatsTarget(before)?.model, "glm-5.3-flash");
 
-  // 刷新后目标顺序反转（请求量排序随流量漂移）：下标要跟着身份走。
+  // 刷新后目标顺序反转也不影响窗口选择（详情固定为窗口总计，没有选中行要重定位）。
   const reordered: StatusSnapshot = {
     ...statsStatus,
     stats: {
@@ -1054,32 +1055,12 @@ test("自动刷新恢复统计页视图状态，并按身份重定位选中目�
       aggregate: {
         ...statsAggregate,
         targets: [...statsAggregate.targets].reverse(),
-        windows: statsAggregate.windows.map((window) => ({
-          ...window,
-          targets: [...window.targets].reverse(),
-        })),
       },
     },
   };
   const restored = restoreStatsView(before, createTuiState(buildCatalog(config), reordered));
   assert.equal(restored.statsWindow, "week7");
-  assert.equal(restored.statsSelected, 1, "下标随目标身份移动");
-  assert.equal(selectedStatsTarget(restored)?.model, "glm-5.3-flash");
-
-  // 目标消失时回到首行，不越界。
-  const empty = restoreStatsView(
-    before,
-    createTuiState(buildCatalog(config), {
-      ...statsStatus,
-      stats: {
-        enabled: true,
-        retentionDays: 30,
-        aggregate: { ...statsAggregate, targets: [], windows: [] },
-      },
-    }),
-  );
-  assert.equal(empty.statsSelected, 0);
-  assert.equal(selectedStatsTarget(empty), null);
+  assert.equal("statsSelected" in restored, false, "选中态字段已删除");
 });
 
 test("统计页目标表格没有路由列 / 过滤行，按上游身份列出目标", () => {
@@ -1091,7 +1072,7 @@ test("统计页目标表格没有路由列 / 过滤行，按上游身份列出�
   assert.doesNotMatch(header, /路由/);
   assert.doesNotMatch(output, /过滤/);
 
-  const targets = statsTargets(state);
+  const targets = statsWindowData(state)?.targets ?? [];
   assert.equal(targets.length, 2);
   assert.equal(targets[0]?.model, "glm-5.3-flash");
   assert.equal(targets[0]?.requests, 2);
@@ -1102,7 +1083,8 @@ test("统计页目标表格没有路由列 / 过滤行，按上游身份列出�
   const lines = output.split("\n");
   assert.ok(lines.some((line) => line.includes("ark/glm-5.3-flash")));
   assert.ok(lines.some((line) => line.includes("ark/glm-5.3-pro")));
-  assert.notEqual(
+  // 统计页没有选中态：↑↓ 不改变渲染结果（没有行高亮）。
+  assert.equal(
     renderTui(moveSelection(state, 1), { height: 34, width: 100 }),
     renderTui(state, { height: 34, width: 100 }),
   );
@@ -1158,24 +1140,29 @@ test("统计页端点列仅在可见行端点多于一个且宽度允许时出�
   }
 });
 
-test("统计页窄窗口下优先保留选中目标详情并报告隐藏行数", () => {
+test("统计页窄窗口下优先保留口径说明与当前窗口总计并报告隐藏行数", () => {
   const state = openPage(createTuiState(buildCatalog(config), statsStatus), "stats");
   const output = renderTui(state, { height: 23, width: 72 });
 
   for (const line of output.split("\n").filter((row) => /^[╭│╰]/.test(row))) {
     assert.equal(visibleWidth(line), 72);
   }
-  // 表格让位，详情五行一个都不少。
-  assert.match(output, /选中详情/);
-  assert.match(output, /平均 560ms · 50分位 150ms · 95分位 1000ms/);
-  assert.match(output, /TTFT 平均 200ms · TTFT 95分位 200ms · 样本 1/);
-  assert.match(output, /吞吐\s+25 tok\/s · 流式 1 · 非流式 1/);
+  // 表格让位，口径说明与总计一个都不少（72 列下折行但内容完整，不被截断）。
+  assert.match(output, /口径  已结束的转发请求；/);
+  assert.match(output, /中断只计请求数，不计错误与耗时/);
+  assert.match(output, /列义  表内数值 = 各上游在当前统计范围的样本平均；/);
+  assert.match(output, /输出速度 = 输出token÷解码时间/);
+  assert.match(output, /当前统计范围总计/);
+  assert.match(output, /延迟   平均总耗时 473ms · 50分位 300ms · 95分位 1000ms/);
+  assert.match(output, /首字延迟 200ms · 95分位 200ms · 样本 1/);
+  assert.match(output, /吞吐   输出速度 25 tok\/s · 流式 1 · 非流式 2/);
   assert.match(output, /推理 5/);
-  assert.match(output, /可靠性 请求 2 · 错误 0（0%）· 中断 0 · 截断 0 · 拦截 0/);
-  // 表格确实让位（只显示 1/2 行），而不是把两行都塞下、注释里说的隐藏没发生。
-  assert.match(output, /表格显示 1\/2 行/);
-  // 可见行共享同一端点，端点列自动隐藏；窄终端仍保住 TTFT / tok/s 这类数值列。
-  assert.match(output, /tok\/s/);
+  assert.match(output, /可靠性 请求 3 · 错误 1（33%）· 中断 0 · 截断 0 · 拦截 0/);
+  // 表格确实让位并报告隐藏行数（短终端下表格一行都放不下）。
+  assert.match(output, /表格显示 0\/2 行/);
+  // 统计页没有选中态，页脚不出现 ↑↓。
+  assert.doesNotMatch(output, /↑↓/);
+  // 可见行共享同一端点，端点列自动隐藏。
   assert.doesNotMatch(output, /端点/);
 });
 
@@ -1192,16 +1179,21 @@ test("formatCount 把大数折算成 K / M / G", () => {
   assert.equal(formatCount(999950000), "1G");
 });
 
-test("统计页表格直接给出 tok/s，p95 / p50 只留在选中详情", () => {
+test("统计页表头用「首字延迟 / 输出速度」，总耗时 / p95 / p50 只留在当前统计范围总计", () => {
   const state = openPage(createTuiState(buildCatalog(config), statsStatus), "stats");
   const output = renderTui(state, { height: 34, width: 100 });
   const header = output.split("\n").find((line) => line.includes("供应商 / 模型")) ?? "";
 
-  assert.match(header, /tok\/s/);
+  assert.doesNotMatch(header, /总耗时/);
+  assert.match(header, /首字延迟/);
+  assert.match(header, /输出速度/);
+  assert.doesNotMatch(header, /平均/);
+  assert.doesNotMatch(header, /TTFT/);
+  assert.doesNotMatch(header, /tok\/s/);
   assert.doesNotMatch(header, /p95/);
-  assert.match(output, /25 tok\/s/, "表格与详情都要能看到 tok/s");
+  assert.match(output, /输出速度 25 tok\/s/, "总计里能看到输出速度与单位");
   assert.match(output, /95分位 1000ms/);
-  assert.match(output, /TTFT 95分位 200ms/);
+  assert.match(output, /95分位 200ms · 样本 1/);
   assert.doesNotMatch(output, /p50|p95/);
   for (const line of output.split("\n").filter((row) => /^[╭│╰]/.test(row))) {
     assert.equal(visibleWidth(line), 100);
@@ -1234,7 +1226,7 @@ test("统计页把 token 大数折算成 K / M", () => {
   assert.match(output, /输入 12M · 输出 1\.3M · 总 13\.3M · 缓存 3\.4M · 推理 999\.4K/);
 });
 
-test("旧 daemon（无 windows）降级为全期汇总并提示", () => {
+test("旧 daemon（无 windows）降级为全期总计并提示", () => {
   const legacy: StatusSnapshot = {
     ...statsStatus,
     stats: {
@@ -1245,12 +1237,12 @@ test("旧 daemon（无 windows）降级为全期汇总并提示", () => {
   };
   const state = openPage(createTuiState(buildCatalog(config), legacy), "stats");
   const output = renderTui(state, { height: 30, width: 90 });
-  assert.match(output, /窗口 全期（daemon 未提供窗口数据）/);
-  assert.match(output, /汇总\s+请求 3/);
+  assert.match(output, /统计范围 全期（旧版 daemon 未提供范围数据）/);
+  assert.match(output, /可靠性 请求 3 · 错误 1/);
   assert.match(output, /ark\/glm-5\.3-flash/);
 });
 
-test("统计页窗口内无已完成请求时给出空态", () => {
+test("统计页范围内无已完成请求时给出空态", () => {
   const accumulator = new AggregateAccumulator();
   const events = sampleStatsEvents();
   for (const item of events) accumulator.add(item);
@@ -1265,7 +1257,7 @@ test("统计页窗口内无已完成请求时给出空态", () => {
   state = toggleStatsWindow(state, 1); // recent10 → hour1
   assert.equal(state.statsWindow, "hour1");
   const output = renderTui(state, { height: 30, width: 90 });
-  assert.match(output, /窗口内暂无已完成请求/);
+  assert.match(output, /范围内暂无已完成请求/);
   assert.match(output, /Token\(近30天\)/);
 });
 
@@ -1299,7 +1291,7 @@ test("统计页空窗口里未发出的请求仍按窗口显示", () => {
     "stats",
   );
   const output = renderTui(state, { height: 30, width: 90 });
-  assert.match(output, /窗口内暂无已完成请求 · 未发出 1/);
+  assert.match(output, /范围内暂无已完成请求 · 未发出 1/);
 });
 
 test("统计页在离线 / 未启用 / 无聚合时都不崩溃", () => {
@@ -1459,4 +1451,62 @@ test("parseStatusSnapshot 兼容缺 aborted 的旧 daemon 聚合", () => {
   const parsedInvalid = parseStatusSnapshot(legacy);
   assert.ok(parsedInvalid?.stats?.aggregate);
   assert.equal(parsedInvalid?.stats?.aggregate?.overall.aborted, 0);
+});
+
+test("模型页空态只提示 q 退出，不再出现死提示 Enter 确认", () => {
+  const output = renderTui(createTuiState([], status), { height: 24, width: 80 });
+
+  assert.match(output, /暂无模型，请先运行 llmwarp add/);
+  assert.match(output, /q 退出/);
+  assert.doesNotMatch(output, /Enter 确认/);
+  assert.doesNotMatch(output, /暂无模型[\s\S]*Enter 确认/);
+});
+
+test("全 TUI 页面页脚都不再出现「换页」「换区」", () => {
+  const base = createTuiState(buildCatalog(config), status, true, providerList);
+  for (const page of TUI_PAGES) {
+    const output = renderTui(openPage(base, page), { height: 30, width: 90 });
+    assert.doesNotMatch(output, /换页|换区/, `${page} 页仍出现旧措辞`);
+  }
+});
+
+test("统计页在 72 / 90 列与矮终端下保持矩形不越界", () => {
+  const base = openPage(createTuiState(buildCatalog(config), statsStatus), "stats");
+  const legacy = openPage(
+    createTuiState(buildCatalog(config), {
+      ...statsStatus,
+      stats: {
+        enabled: true,
+        retentionDays: 30,
+        aggregate: { ...statsAggregate, windows: [] },
+      },
+    }),
+    "stats",
+  );
+  const states: Array<[string, TuiState]> = [
+    ["最近10条（有数据）", base],
+    ["近1小时（空窗口）", toggleStatsWindow(base, 1)],
+    ["近7天", toggleStatsWindow(toggleStatsWindow(toggleStatsWindow(base, 1), 1), 1)],
+    ["旧 daemon 降级", legacy],
+  ];
+
+  for (const height of [34, 24, 23, 18]) {
+    for (const width of [90, 72]) {
+      for (const [label, state] of states) {
+        const lines = renderTui(state, { height, width }).split("\n");
+        assert.ok(
+          lines.length <= height,
+          `${label} 在 ${height}x${width} 下渲染 ${lines.length} 行，写下去会让终端滚动`,
+        );
+        lines.forEach((line, index) => {
+          const expected = index === lines.length - 1 ? width - 1 : width;
+          assert.equal(
+            visibleWidth(line),
+            expected,
+            `${label} 在 width=${width} 下存在非等宽行，ESC[J 会留下上一帧的尾巴`,
+          );
+        });
+      }
+    }
+  }
 });

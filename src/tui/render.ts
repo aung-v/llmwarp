@@ -5,10 +5,9 @@ import {
   selectedEntry,
   selectedProvider,
   selectedRouting,
-  selectedStatsIndex,
   statsWindowData,
 } from "./model.js";
-import type { TargetAggregate } from "../stats/aggregate.js";
+import type { AggregateMetrics } from "../stats/aggregate.js";
 import pc from "picocolors";
 
 const ANSI_ESCAPE = /\u001B\[[0-?]*[ -/]*[@-~]|\u001B\][^\u0007]*(?:\u0007|\u001B\\)/g;
@@ -116,7 +115,7 @@ function navTabs(state: TuiState): string {
   const hint = busy
     ? pc.dim("  处理中…")
     : state.focus === "nav"
-      ? pc.dim("  ←→ 换页  ↑↓ 进入列表")
+      ? pc.dim("  ←→ 切页面  ↑↓ 进入列表")
       : "";
   return `${tab("models", "模型")} ${tab("routing", "模式")} ${tab("providers", "供应商")} ${tab("stats", "统计")}${hint}`;
 }
@@ -126,7 +125,8 @@ function modelRows(state: TuiState, height: number): string[] {
   if (state.entries.length === 0) {
     rows.push(pc.dim("暂无模型，请先运行 llmwarp add"));
     rows.push("");
-    rows.push(pc.dim("Enter 确认  q 退出"));
+    // 空列表下 Enter 无任何行为，只提示真正可用的退出键。
+    rows.push(pc.dim("q 退出"));
     return rows;
   }
 
@@ -193,7 +193,7 @@ function routingRows(state: TuiState): string[] {
   rows.push(pc.dim("按客户端请求：以上都生效"));
   rows.push(pc.dim("统一用当前模型：忽略 model"));
   rows.push("");
-  rows.push(pc.dim("Enter 切换模式  ←→ 换区"));
+  rows.push(pc.dim("Enter 切换模式  ←→ 切页面/左右栏"));
   return rows;
 }
 
@@ -370,26 +370,50 @@ function percent(rate: number): string {
   return `${value >= 10 || value === 0 ? value.toFixed(0) : value.toFixed(1)}%`;
 }
 
-/** 选中目标的完整指标详情：每个 AggregateMetrics 字段都必须在这里出现。 */
-function statsDetailRows(target: TargetAggregate | null): string[] {
-  if (!target) {
-    return ["", pc.bold("选中详情"), pc.dim("  当前没有上游目标")];
-  }
-  const hasTtft = target.ttftSamples > 0;
+/**
+ * 详情区固定为「当前统计范围总计」，数据源是当前范围的 `overall`，不再跟随选中的上游目标。
+ * 每个 AggregateMetrics 字段都必须在这里出现（字段集合与以前的详情保持一致）。
+ */
+function statsTotalRows(overall: AggregateMetrics): string[] {
+  const hasTtft = overall.ttftSamples > 0;
   return [
     "",
-    pc.bold(
-      `选中详情  ${sanitize(target.provider ?? "未发出")}/${sanitize(target.model ?? "—")} · ${sanitize(shortEndpoint(target.endpoint))}`,
-    ),
-    `  延迟   平均 ${target.avgDurationMs}ms · 50分位 ${target.p50DurationMs}ms · 95分位 ${target.p95DurationMs}ms`,
-    `         TTFT 平均 ${hasTtft ? `${target.avgTtftMs}ms` : "—"} · TTFT 95分位 ${hasTtft ? `${target.p95TtftMs}ms` : "—"} · 样本 ${formatCount(target.ttftSamples)}`,
-    `  吞吐   ${formatRate(target.outputTokensPerSecond)} tok/s · 流式 ${formatCount(target.streamRequests)} · 非流式 ${formatCount(target.nonStreamRequests)}`,
-    `  token  输入 ${formatCount(target.inputTokens)} · 输出 ${formatCount(target.outputTokens)} · 总 ${formatCount(target.totalTokens)} · 缓存 ${formatCount(target.cachedTokens)} · 推理 ${formatCount(target.reasoningTokens)}`,
-    `  可靠性 请求 ${formatCount(target.requests)} · 错误 ${formatCount(target.errors)}（${percent(target.errorRate)}）· 中断 ${formatCount(target.aborted)} · 截断 ${formatCount(target.truncations)} · 拦截 ${formatCount(target.contentFiltered)}`,
+    pc.bold("当前统计范围总计"),
+    `  延迟   平均总耗时 ${overall.avgDurationMs}ms · 50分位 ${overall.p50DurationMs}ms · 95分位 ${overall.p95DurationMs}ms`,
+    `         首字延迟 ${hasTtft ? `${overall.avgTtftMs}ms` : "—"} · 95分位 ${hasTtft ? `${overall.p95TtftMs}ms` : "—"} · 样本 ${formatCount(overall.ttftSamples)}`,
+    `  吞吐   输出速度 ${formatRate(overall.outputTokensPerSecond)} tok/s · 流式 ${formatCount(overall.streamRequests)} · 非流式 ${formatCount(overall.nonStreamRequests)}`,
+    `  token  输入 ${formatCount(overall.inputTokens)} · 输出 ${formatCount(overall.outputTokens)} · 总 ${formatCount(overall.totalTokens)} · 缓存 ${formatCount(overall.cachedTokens)} · 推理 ${formatCount(overall.reasoningTokens)}`,
+    `  可靠性 请求 ${formatCount(overall.requests)} · 错误 ${formatCount(overall.errors)}（${percent(overall.errorRate)}）· 中断 ${formatCount(overall.aborted)} · 截断 ${formatCount(overall.truncations)} · 拦截 ${formatCount(overall.contentFiltered)}`,
   ];
 }
 
-/** 统计页主体：固定最近 30 天 token 火花线 + 选中窗口的汇总 / 上游目标表 + 选中详情。 */
+/**
+ * 统计口径说明（PRD 原样文案）。两行逻辑说明在 72 列终端下都会超出面板宽度，
+ * 直接交给 truncate 会丢信息，所以按 `；` 分句折行，保证每一物理行都不被截断。
+ */
+const STATS_GLOSSARY = [
+  "口径  已结束的转发请求；进行中、路由失败不计；中断只计请求数，不计错误与耗时",
+  "列义  表内数值 = 各上游在当前统计范围的样本平均；首字延迟 = 第一个 token 到达（仅流式）；输出速度 = 输出token÷解码时间，单位 tok/s（仅流式）",
+];
+
+/** 按 `；` 分句贪心折行到 `width`，宁可多占一行也不截断内容。 */
+function wrapGlossary(text: string, width: number): string[] {
+  const segments = text.split(/(?<=；)/).filter((segment) => segment.length > 0);
+  const rows: string[] = [];
+  let current = "";
+  for (const segment of segments) {
+    if (current && visibleWidth(current + segment) > width) {
+      rows.push(current);
+      current = segment;
+    } else {
+      current += segment;
+    }
+  }
+  if (current) rows.push(current);
+  return rows;
+}
+
+/** 统计页主体：固定最近 30 天 token 火花线 + 当前统计范围上游目标表 + 口径说明 + 当前统计范围总计。 */
 function statsRows(state: TuiState, height: number, width: number): string[] {
   const snapshot = state.status?.stats;
   if (!state.status) {
@@ -417,14 +441,14 @@ function statsRows(state: TuiState, height: number, width: number): string[] {
 
   const rows: string[] = [];
 
-  // 窗口说明行：窗口只作用于下面的数字；旧 daemon 无 windows 时退回全期并给出提示。
+  // 统计范围说明行：范围只作用于下面的数字；旧 daemon 无 windows 时退回全期并给出提示。
   rows.push(
     view.window
-      ? pc.dim(`窗口 ${view.window.label} · 已完成请求 · 进行中不计`)
-      : pc.dim("窗口 全期（daemon 未提供窗口数据）· 已完成请求 · 进行中不计"),
+      ? pc.dim(`统计范围 ${view.window.label} · 只算已结束的转发请求`)
+      : pc.dim("统计范围 全期（旧版 daemon 未提供范围数据）"),
   );
 
-  // 火花线与窗口解耦：固定最近 30 天按天 token 趋势，标出最小 / 最大 / 当前。
+  // 火花线与统计范围解耦：固定最近 30 天按天 token 趋势，标出最小 / 最大 / 当前。
   const sparkDays = aggregate.days.slice(-30);
   const values = sparkDays.map((point) => point.totalTokens);
   if (values.length === 0) {
@@ -439,37 +463,28 @@ function statsRows(state: TuiState, height: number, width: number): string[] {
     );
   }
 
-  // 窗口内没有命中上游的已完成请求：给出空态，不渲染空表 / 空详情；
-  // 但未发出（本地错误 / 无可用上游）仍要按窗口显示，否则会被误读成「窗口内什么都没发生」。
+  // 范围内没有命中上游的已完成请求：给出空态，不渲染空表 / 空详情；
+  // 但未发出（本地错误 / 无可用上游）仍要按统计范围显示，否则会被误读成「范围内什么都没发生」。
   if (view.overall.requests === 0) {
     const unrouted = view.unrouted.requests;
     rows.push(
       "",
-      pc.dim(`窗口内暂无已完成请求${unrouted > 0 ? ` · 未发出 ${formatCount(unrouted)}` : ""}`),
+      pc.dim(`范围内暂无已完成请求${unrouted > 0 ? ` · 未发出 ${formatCount(unrouted)}` : ""}`),
     );
     return rows;
   }
 
   const overall = view.overall;
   const targets = view.targets;
-  rows.push(
-    `汇总  请求 ${formatCount(overall.requests)} · 错误 ${formatCount(overall.errors)}（${percent(overall.errorRate)}）· 平均 ${overall.avgDurationMs}ms · 95分位 ${overall.p95DurationMs}ms`,
-    pc.dim(
-      `      TTFT 平均 ${overall.ttftSamples > 0 ? `${overall.avgTtftMs}ms` : "—"} · 输出 ${formatRate(overall.outputTokensPerSecond)} tok/s · 截断 ${formatCount(overall.truncations)} · 拦截 ${formatCount(overall.contentFiltered)} · 中断 ${formatCount(overall.aborted)}`,
-    ),
-    pc.dim(
-      `      token 输入 ${formatCount(overall.inputTokens)} · 输出 ${formatCount(overall.outputTokens)} · 缓存 ${formatCount(overall.cachedTokens)} · 推理 ${formatCount(overall.reasoningTokens)}`,
-    ),
-  );
 
   // 统计只按上游身份聚合（provider + model + endpoint），不再按 routeKind 拆行，表格因此没有「路由」列。
-  const selectedIndex = selectedStatsIndex(state, targets.length);
   const targetRequests = targets.reduce((sum, target) => sum + target.requests, 0);
   const targetErrors = targets.reduce((sum, target) => sum + target.errors, 0);
-  const detail = statsDetailRows(selectedIndex >= 0 ? (targets[selectedIndex] ?? null) : null);
+  const glossary = STATS_GLOSSARY.flatMap((line) => wrapGlossary(line, width)).map((line) => pc.dim(line));
+  const detail = statsTotalRows(overall);
 
-  // 空间不够时优先保住详情：扣除「命中一行 + 表头/分隔线」与详情后，余下的才是目标行。
-  const tableSpace = Math.max(height - rows.length - 1 - 2 - detail.length, 0);
+  // 空间不够时优先保住口径说明与总计：扣除「命中一行 + 表头/分隔线」与它们后，余下的才是目标行。
+  const tableSpace = Math.max(height - rows.length - 1 - 2 - detail.length - glossary.length, 0);
   const shown = Math.min(targets.length, tableSpace);
 
   rows.push(
@@ -478,33 +493,35 @@ function statsRows(state: TuiState, height: number, width: number): string[] {
     ),
   );
 
-  // 表格列：供应商 / 模型 · [端点] · 请求 · 错误率 · 平均 · TTFT · tok/s。
-  // p95 不再进表格（总耗时 p95 混着回答长度，价值低于 TTFT / tok/s），留在选中详情。
+  // 表格列：供应商 / 模型 · [端点] · 请求 · 错误率 · 首字延迟 · 输出速度。
+  // 总耗时（端到端）不进表格：它被回答长度主导，拿来比上游快慢会误导；p50 / p95 同理。
+  // 这三者都只留在「当前统计范围总计」块里。
   // 「端点」列只有在可见行端点多于一个、且宽度放得下时才出现；窄终端优先保住数值列。
   const endpointWidth = 16;
   const visibleTargets = targets.slice(0, shown);
   const hasMixedEndpoints = new Set(visibleTargets.map((target) => target.endpoint)).size > 1;
   // 端点列要多花 17 列；只有端点多于一个、且标签列仍能保持 20 列以上时才值得显示，
-  // 否则窄终端优先保住 请求 / 错误率 / 平均 / TTFT / tok/s 这些数值列。
-  const showEndpoint = hasMixedEndpoints && width - 54 >= 20;
-  const labelWidth = Math.max(width - (showEndpoint ? 54 : 37), 8);
+  // 否则窄终端优先保住 请求 / 错误率 / 首字延迟 / 输出速度 这些数值列。
+  const showEndpoint = hasMixedEndpoints && width - 50 >= 20;
+  const labelWidth = Math.max(width - (showEndpoint ? 50 : 33), 8);
   if (targets.length === 0) {
     rows.push("", pc.dim("暂无上游目标"));
   } else if (tableSpace >= 1) {
     rows.push(
       pc.bold(
-        `${pad("供应商 / 模型", labelWidth)} ${showEndpoint ? `${pad("端点", endpointWidth)} ` : ""}${rightAlign("请求", 6)} ${rightAlign("错误率", 7)} ${rightAlign("平均", 6)} ${rightAlign("TTFT", 6)} ${rightAlign("tok/s", 7)}`,
+        `${pad("供应商 / 模型", labelWidth)} ${showEndpoint ? `${pad("端点", endpointWidth)} ` : ""}${rightAlign("请求", 6)} ${rightAlign("错误率", 7)} ${rightAlign("首字延迟", 8)} ${rightAlign("输出速度", 8)}`,
       ),
       pc.dim("─".repeat(Math.max(width, 10))),
     );
-    visibleTargets.forEach((target, index) => {
+    visibleTargets.forEach((target) => {
       // 旧载荷可能仍带 provider 为空的目标（新代码不再产生）；标签统一用「未发出」。
       const label = `${sanitize(target.provider ?? "未发出")}/${sanitize(target.model ?? "—")}`;
       const ttft = target.ttftSamples > 0 ? `${target.avgTtftMs}ms` : "—";
-      const line = `${pad(label, labelWidth)} ${showEndpoint ? `${pad(shortEndpoint(sanitize(target.endpoint)), endpointWidth)} ` : ""}${rightAlign(formatCount(target.requests), 6)} ${rightAlign(percent(target.errorRate), 7)} ${rightAlign(`${target.avgDurationMs}ms`, 6)} ${rightAlign(ttft, 6)} ${rightAlign(formatRate(target.outputTokensPerSecond), 7)}`;
-      rows.push(index === selectedIndex ? pc.bgBlue(pc.white(line)) : line);
+      const line = `${pad(label, labelWidth)} ${showEndpoint ? `${pad(shortEndpoint(sanitize(target.endpoint)), endpointWidth)} ` : ""}${rightAlign(formatCount(target.requests), 6)} ${rightAlign(percent(target.errorRate), 7)} ${rightAlign(ttft, 8)} ${rightAlign(formatRate(target.outputTokensPerSecond), 8)}`;
+      rows.push(line);
     });
   }
+  rows.push(...glossary);
   rows.push(...detail);
   return rows;
 }
@@ -691,10 +708,10 @@ export function renderTui(
   const keyHint = state.switching
     ? "处理中… 请稍候（Ctrl-C 可退出）"
     : state.page === "stats"
-      ? "↑↓ 选择目标  h 窗口  ←→ 换页  r 刷新  q 退出"
+      ? "h 切换统计范围 · ←→ 切页面/左右栏 · r 刷新 · q 退出"
       : state.page === "providers"
-        ? "↑↓ 选中  Enter 打开操作菜单  ←→ 换页  r 刷新  q 退出"
-        : "↑↓ 选中  ←→ 换区/换页  Enter 确认  Esc 取消  r 刷新  q 退出";
+        ? "↑↓ 选择 · Enter 操作菜单 · ←→ 切页面/左右栏 · Esc 返回 · r 刷新 · q 退出"
+        : "↑↓ 选择 · Enter 切换 · ←→ 切页面/左右栏 · Esc 返回 · r 刷新 · q 退出";
   const message = state.message && !state.switching && !state.confirming ? state.message : null;
   const footerText = message
     ? `${sanitize(message)}    ${keyHint}`

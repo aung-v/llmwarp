@@ -30,7 +30,7 @@ const { beginRoutingConfirm, cancelConfirm, createTuiState, focusNext, focusPrev
 
 const socketSkip = await skipWithoutSockets();
 
-/** 走真实键位路径切到路由页：← 到导航栏 → → 换页 → ↓ 把焦点落回列表。 */
+/** 走真实键位路径切到路由页：← 到导航栏 → → 切页面 → ↓ 把焦点落回列表。 */
 function openRoutingPage(state: ReturnType<typeof createTuiState>): ReturnType<typeof createTuiState> {
   return moveSelection(focusNext(focusPrev(state)), 1);
 }

@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/usage-stats.md", "reason": "统计出口/列名矩阵与测试契约需同步"}
+{"file": ".trellis/spec/frontend/interaction-guidelines.md", "reason": "按键表、统计页描述与渲染不变量"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "statsWindow/statsSelected 状态语义"}
+{"file": ".trellis/spec/frontend/architecture.md", "reason": "TuiState 字段与页面结构"}

@@ -60,7 +60,7 @@ export type ConfirmIntent = "switch" | "routing" | "restart" | "provider-action"
 /** 顶部导航页：模型列表 / 模型路由模式 / 供应商管理 / 用量统计。 */
 export type TuiPage = "models" | "routing" | "providers" | "stats";
 
-/** 顶部导航顺序，也决定 ←→ 换页循环顺序。 */
+/** 顶部导航顺序，也决定 ←→ 切页面循环顺序。 */
 export const TUI_PAGES: TuiPage[] = ["models", "routing", "providers", "stats"];
 
 /** 键盘焦点区域：导航栏 / 当前页列表 / 守护进程信息栏（含重启按钮）。 */
@@ -119,8 +119,6 @@ export interface TuiState {
   useClientModel: boolean;
   /** 统计页选中的时间窗口；`h` 在 `STATS_WINDOWS` 顺序里循环。 */
   statsWindow: StatsWindowId;
-  /** 选中的目标行（目标列表里的下标）；越界时按末行处理。 */
-  statsSelected: number;
 }
 
 export function buildCatalog(config: Config, status?: StatusSnapshot | null): CatalogItem[] {
@@ -196,11 +194,10 @@ export function createTuiState(
     switching: false,
     useClientModel,
     statsWindow: "recent10",
-    statsSelected: 0,
   };
 }
 
-/** 确认态或动作进行中时，导航（换页/换区/移动选择）一律忽略。 */
+/** 确认态或动作进行中时，导航（切页面/移动选择）一律忽略。 */
 function navigationLocked(state: TuiState): boolean {
   return state.switching || state.confirming !== null;
 }
@@ -249,10 +246,8 @@ export function moveSelection(state: TuiState, delta: number): TuiState {
   }
 
   if (state.page === "stats") {
-    // ↑↓ 在目标表格里移动选中行（与其它页「↑↓ 选中」保持一致）。
-    const count = statsTargets(state).length;
-    const next = Math.min(Math.max(state.statsSelected + delta, 0), Math.max(count - 1, 0));
-    return { ...state, statsSelected: next };
+    // 统计页只做只读展示：详情固定为当前统计范围总计，不再跟随选中，因此 ↑↓ 无操作。
+    return state;
   }
 
   const next = Math.min(Math.max(state.selected + delta, 0), Math.max(state.entries.length - 1, 0));
@@ -296,47 +291,12 @@ export function statsWindowData(state: TuiState): StatsWindowView | null {
   };
 }
 
-/** 统计页的目标列表（当前窗口，上游身份：provider + model + endpoint）；渲染、选中、刷新重定位共用同一份顺序。 */
-export function statsTargets(state: TuiState): TargetAggregate[] {
-  return statsWindowData(state)?.targets ?? [];
-}
-
-/** 选中行在目标列表里的有效下标；空列表返回 -1。 */
-export function selectedStatsIndex(state: TuiState, count: number): number {
-  if (count <= 0) return -1;
-  return Math.min(Math.max(state.statsSelected, 0), count - 1);
-}
-
-/** 统计页当前选中的上游目标；没有目标时为 null。 */
-export function selectedStatsTarget(state: TuiState): TargetAggregate | null {
-  const targets = statsTargets(state);
-  const index = selectedStatsIndex(state, targets.length);
-  return index >= 0 ? (targets[index] ?? null) : null;
-}
-
-/** 目标身份：刷新后按这三个键重新定位选中行（排序会随流量变化）。 */
-export function sameStatsTarget(a: TargetAggregate, b: TargetAggregate): boolean {
-  return a.provider === b.provider && a.model === b.model && a.endpoint === b.endpoint;
-}
-
-/** 刷新后把旧的选中目标映射回新列表；找不到就回到首行。 */
-export function locateStatsTarget(targets: TargetAggregate[], target: TargetAggregate | null): number {
-  if (!target) return 0;
-  const index = targets.findIndex((item) => sameStatsTarget(item, target));
-  return index >= 0 ? index : 0;
-}
-
 /**
- * 刷新时恢复统计页的纯视图状态（指标 / 粒度 / 选中目标）。
- * 目标行按请求量排序，下标会随流量漂移，所以选中行按身份重新定位而不是沿用下标。
+ * 刷新时恢复统计页的纯视图状态（当前统计范围）。
+ * 详情固定为「当前统计范围总计」，不跟随选中，所以只需保住范围。
  */
 export function restoreStatsView(previous: TuiState, next: TuiState): TuiState {
-  // 先恢复窗口，再按身份在当前窗口的目标列表里重定位选中行（两个窗口的目标行不同）。
-  const restored = { ...next, statsWindow: previous.statsWindow };
-  return {
-    ...restored,
-    statsSelected: locateStatsTarget(statsTargets(restored), selectedStatsTarget(previous)),
-  };
+  return { ...next, statsWindow: previous.statsWindow };
 }
 
 export function selectedEntry(state: TuiState): CatalogItem | null {
