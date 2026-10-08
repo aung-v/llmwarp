@@ -227,11 +227,36 @@ test("渲染请求活动统计和最近请求", () => {
   const output = renderTui(state, { height: 24, width: 80 });
 
   assert.match(output, /请求活动/);
-  assert.match(output, /60秒 2 · 错误 0/);
-  assert.match(output, /RPM 2 · 平均 120ms/);
+  assert.match(output, /近60秒 请求 2 · 错误 0/);
+  assert.match(output, /平均耗时 120ms/);
+  assert.match(output, /本次运行 请求 2 · 错误 0/);
+  assert.doesNotMatch(output, /RPM/);
+  assert.doesNotMatch(output, /平均 120ms/);
   assert.match(output, /POST \/v1\/chat\/completions/);
   assert.match(output, /200 120ms ark\/glm-5\.3-flash/);
   assert.doesNotMatch(output, /secret-key/);
+});
+
+test("请求活动面板在 72 列下用 K/M 折算大数，不截断", () => {
+  const state = createTuiState(buildCatalog(config), {
+    ...status,
+    metrics: {
+      totalRequests: 1234567,
+      totalErrors: 12345,
+      requestsLastMinute: 1234,
+      errorsLastMinute: 12345,
+      requestsPerMinute: 1234,
+      averageDurationMs: 99999,
+      recent: [],
+    },
+  });
+  // 最小终端宽：右栏内宽只有 33 列，原样输出 1234567 / 12345 会把「本次运行」行截断。
+  const output = renderTui(state, { height: 24, width: 72 });
+
+  assert.match(output, /近60秒 请求 1\.2K · 错误 12\.3K/);
+  assert.match(output, /平均耗时 99999ms/);
+  assert.match(output, /本次运行 请求 1\.2M · 错误 12\.3K/);
+  assert.doesNotMatch(output, /RPM/);
 });
 
 test("离线时守护进程栏显示启动按钮且不自动启动 daemon", () => {

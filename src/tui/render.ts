@@ -301,10 +301,14 @@ function activityRows(state: TuiState, height: number, width: number): string[] 
     return rows;
   }
 
+  // 实时指标（内存，daemon 重启清零）：requestsPerMinute 与 requestsLastMinute 是同一个
+  // 60 秒窗口的同一个值，只展示一次；`平均耗时` 紧跟在 `近60秒` 之后以标明样本范围，
+  // `本次运行` 说明 `总计` 的起点。计数走 formatCount 折算 K/M/G（与统计页同一口径），
+  // 否则长跑 daemon 的累计值会把 72 列终端右栏（内宽 33）的行撑到截断。
   rows.push(
-    `60秒 ${metrics.requestsLastMinute} · 错误 ${metrics.errorsLastMinute}`,
-    `RPM ${metrics.requestsPerMinute} · 平均 ${metrics.averageDurationMs}ms`,
-    `总计 ${metrics.totalRequests} · 错误 ${metrics.totalErrors}`,
+    `近60秒 请求 ${formatCount(metrics.requestsLastMinute)} · 错误 ${formatCount(metrics.errorsLastMinute)}`,
+    `平均耗时 ${metrics.averageDurationMs}ms`,
+    `本次运行 请求 ${formatCount(metrics.totalRequests)} · 错误 ${formatCount(metrics.totalErrors)}`,
   );
   const entryLimit = Math.max(Math.floor((height - rows.length) / 2), 0);
   for (const request of metrics.recent.slice(0, entryLimit)) {
