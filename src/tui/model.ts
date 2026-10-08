@@ -53,8 +53,8 @@ export interface CatalogItem {
   legacy?: boolean;
 }
 
-/** 确认态意图：切换模型 / 切换模型路由 / 重启守护进程 / 删除供应商。 */
-export type ConfirmIntent = "switch" | "routing" | "restart" | "remove-provider";
+/** 确认态意图：切换模型 / 切换模型路由 / 重启守护进程 / 供应商操作菜单 / 删除供应商。 */
+export type ConfirmIntent = "switch" | "routing" | "restart" | "provider-action" | "remove-provider";
 
 /** 顶部导航页：模型列表 / 模型路由模式 / 供应商管理 / 用量统计。 */
 export type TuiPage = "models" | "routing" | "providers" | "stats";
@@ -92,6 +92,14 @@ export interface ProviderSummary {
   models: number;
 }
 
+/** 供应商操作菜单的动作；顺序即菜单顺序，第一项默认高亮。 */
+export type ProviderAction = "edit" | "remove";
+
+export const PROVIDER_ACTIONS: { action: ProviderAction; label: string }[] = [
+  { action: "edit", label: "编辑" },
+  { action: "remove", label: "删除" },
+];
+
 /** 路由页固定两项，顺序即列表顺序。 */
 export const ROUTING_OPTIONS: RoutingOption[] = [
   { useClientModel: true, label: "按客户端请求" },
@@ -106,7 +114,8 @@ export interface TuiState {
   routingSelected: number;
   providers: ProviderSummary[];
   providerCursor: number;
-  providerSelected: number;
+  /** 「编辑 / 删除」操作菜单的高亮项下标（0=编辑，1=删除）。 */
+  providerActionIndex: number;
   confirming: ConfirmIntent | null;
   events: TuiEvent[];
   status: StatusSnapshot | null;
@@ -184,7 +193,7 @@ export function createTuiState(
     routingSelected: useClientModel ? 0 : 1,
     providers,
     providerCursor: 0,
-    providerSelected: 0,
+    providerActionIndex: 0,
     confirming: null,
     events: [],
     status,
@@ -239,12 +248,10 @@ export function moveSelection(state: TuiState, delta: number): TuiState {
   }
 
   if (state.page === "providers") {
-    // 行 = 供应商 × n + [添加] + [删除]，索引 0..n+1。
-    const max = Math.max(state.providers.length + 1, 0);
+    // 行 = 供应商 × n + [添加供应商]，索引 0..n。
+    const max = Math.max(state.providers.length, 0);
     const next = Math.min(Math.max(state.providerCursor + delta, 0), max);
-    // 光标落在供应商行上时才更新"删除目标"，停在按钮行时保留上一个供应商。
-    const providerSelected = next < state.providers.length ? next : state.providerSelected;
-    return { ...state, providerCursor: next, providerSelected };
+    return { ...state, providerCursor: next };
   }
 
   if (state.page === "stats") {
@@ -321,9 +328,9 @@ export function selectedEntry(state: TuiState): CatalogItem | null {
   return state.entries[state.selected] ?? null;
 }
 
-/** 供应商页当前"编辑/删除"的目标供应商。 */
+/** 供应商页当前高亮的供应商；光标停在 [ + 添加供应商 ] 行时为 null。 */
 export function selectedProvider(state: TuiState): ProviderSummary | null {
-  return state.providers[state.providerSelected] ?? null;
+  return state.providers[state.providerCursor] ?? null;
 }
 
 /** Enter：进入“切换模型”确认态。 */
@@ -354,11 +361,43 @@ export function beginRestart(state: TuiState): TuiState | null {
   return { ...state, confirming: null, switching: true, message: "重启中…" };
 }
 
-/** 供应商页「删除」行 Enter：进入删除确认（目标为最后停留的供应商）。 */
-export function beginRemoveProviderConfirm(state: TuiState): TuiState {
+/**
+ * 供应商页供应商行 Enter：打开覆盖式「编辑 / 删除」操作菜单。
+ * 菜单标题与后续动作都锁定在这一行选中的供应商上，不再依赖光标经过的最后一格。
+ */
+export function beginProviderAction(state: TuiState): TuiState {
   if (navigationLocked(state) || state.page !== "providers") return state;
-  if (state.providerCursor !== state.providers.length + 1) return state;
-  if (state.providers.length === 0) return { ...state, message: "没有可删除的供应商" };
+  if (state.focus !== "list") return state;
+  if (!selectedProvider(state)) return state;
+  return { ...state, confirming: "provider-action", providerActionIndex: 0, message: null };
+}
+
+/** 操作菜单内 ↑ / ↓：在「编辑 / 删除」两项间移动，越界收敛。 */
+export function moveProviderAction(state: TuiState, delta: number): TuiState {
+  if (state.confirming !== "provider-action" || state.switching) return state;
+  const next = Math.min(
+    Math.max(state.providerActionIndex + delta, 0),
+    PROVIDER_ACTIONS.length - 1,
+  );
+  return { ...state, providerActionIndex: next };
+}
+
+/** 操作菜单当前高亮的动作；越界按第一项处理。 */
+export function selectedProviderAction(state: TuiState): ProviderAction {
+  return (PROVIDER_ACTIONS[state.providerActionIndex] ?? PROVIDER_ACTIONS[0]).action;
+}
+
+/** 操作菜单选「编辑」：关闭菜单并进入在途态，交由调用方跑挂起的 edit 流程。 */
+export function beginProviderEdit(state: TuiState): TuiState | null {
+  if (state.confirming !== "provider-action" || state.switching) return null;
+  if (selectedProviderAction(state) !== "edit") return null;
+  return { ...state, confirming: null, switching: true, message: "编辑中…" };
+}
+
+/** 操作菜单选「删除」：进入删除二次确认（目标 = 当前高亮的供应商）。 */
+export function beginRemoveProviderConfirm(state: TuiState): TuiState {
+  if (state.switching || state.confirming !== "provider-action") return state;
+  if (selectedProviderAction(state) !== "remove") return state;
   if (!selectedProvider(state)) return state;
   return { ...state, confirming: "remove-provider", message: null };
 }

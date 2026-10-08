@@ -19,10 +19,12 @@ import {
 } from "../daemon.js";
 import { debugLog, resetDebugLog } from "../debuglog.js";
 import {
-  beginRestart,
-  beginRestartConfirm,
+  beginProviderAction,
+  beginProviderEdit,
   beginRemoveProvider,
   beginRemoveProviderConfirm,
+  beginRestart,
+  beginRestartConfirm,
   beginRouting,
   beginRoutingConfirm,
   beginSwitch,
@@ -34,12 +36,14 @@ import {
   focusPrev,
   finishSuspended,
   finishSwitch,
+  moveProviderAction,
   moveSelection,
   parseStatusSnapshot,
   pushEvent,
   restoreStatsView,
   selectedEntry,
   selectedProvider,
+  selectedProviderAction,
   selectedRouting,
   toggleStatsRange,
   toggleStatsMetric,
@@ -223,8 +227,10 @@ export async function startTui(): Promise<void> {
       const previousFocus = base.focus;
       const previousRoutingSelected = base.routingSelected;
       const previousProviderCursor = base.providerCursor;
-      const previousProviderSelected = base.providerSelected;
+      const previousProviderActionIndex = base.providerActionIndex;
       const previousConfirming = base.confirming;
+      // 确认态携带的供应商身份：刷新后按名字重定位，供应商消失则关闭菜单 / 取消确认。
+      const previousProviderName = selectedProvider(base)?.name ?? null;
       const previousEvents = base.events;
       state = createTuiState(entries, status, useClientModel, providers);
       // 右下角反馈区的内容不能被自动刷新清掉。
@@ -234,9 +240,9 @@ export async function startTui(): Promise<void> {
       state.focus = previousFocus;
       // 用户停留在路由页时不因自动刷新重置其选择；否则跟随配置里的当前模式。
       if (previousPage === "routing") state.routingSelected = previousRoutingSelected;
-      // 供应商页同理：光标和删除目标要保住，且供应商减少后要收敛到有效范围。
-      state.providerCursor = Math.min(previousProviderCursor, Math.max(providers.length + 1, 0));
-      state.providerSelected = Math.min(previousProviderSelected, Math.max(providers.length - 1, 0));
+      // 供应商页同理：光标要保住并收敛到有效范围（供应商行 + [添加] 行，索引 0..n）。
+      state.providerCursor = Math.min(previousProviderCursor, Math.max(providers.length, 0));
+      state.providerActionIndex = previousProviderActionIndex;
       // 统计页的指标 / 粒度 / 选中目标都是纯视图状态，自动刷新不能重置。
       state = restoreStatsView(base, state);
       if (previousConfirming === "switch") {
@@ -246,11 +252,19 @@ export async function startTui(): Promise<void> {
       } else if (previousConfirming === "restart" && previousFocus === "daemon") {
         state.confirming = "restart";
       } else if (
-        previousConfirming === "remove-provider" &&
-        previousPage === "providers" &&
-        providers.length > 0
+        (previousConfirming === "remove-provider" || previousConfirming === "provider-action") &&
+        previousPage === "providers"
       ) {
-        state.confirming = "remove-provider";
+        // 菜单 / 确认锁定的是某个供应商，刷新后按名字重定位；消失了就收敛回列表。
+        const targetIndex = previousProviderName
+          ? providers.findIndex((provider) => provider.name === previousProviderName)
+          : -1;
+        if (targetIndex >= 0) {
+          state.confirming = previousConfirming;
+          state.providerCursor = targetIndex;
+        } else {
+          state.confirming = null;
+        }
       }
       state.message = message;
       debugLog("refresh", "end", { running: Boolean(running) });
@@ -326,7 +340,7 @@ export async function startTui(): Promise<void> {
         // 配置不可读时保留当前显示
       }
       state = {
-        ...pushEvent(finishSwitch(state, null), "error", `切换路由失败：\n${(err as Error).message}`),
+        ...pushEvent(finishSwitch(state, null), "error", `切换模式失败：\n${(err as Error).message}`),
         useClientModel: mode,
       };
       draw();
@@ -375,15 +389,12 @@ export async function startTui(): Promise<void> {
       return;
     }
     if (state.page === "providers") {
-      // 供应商行 = 编辑；[添加] 行 = 新增；[删除] 行 = 进入确认。
+      // 供应商行 = 打开「编辑 / 删除」操作菜单；[添加] 行 = 新增。
       if (state.providerCursor < state.providers.length) {
-        const target = state.providers[state.providerCursor];
-        void runSuspended(`编辑供应商 ${target.name}`, () => editCommand(target.name));
-      } else if (state.providerCursor === state.providers.length) {
-        void runSuspended("添加供应商", () => addCommand());
-      } else {
-        state = beginRemoveProviderConfirm(state);
+        state = beginProviderAction(state);
         draw();
+      } else {
+        void runSuspended("添加供应商", () => addCommand());
       }
       return;
     }
@@ -398,6 +409,25 @@ export async function startTui(): Promise<void> {
     } else {
       state = beginSwitchConfirm(state);
     }
+    draw();
+  };
+
+  const runProviderAction = async (): Promise<void> => {
+    const target = selectedProvider(state);
+    if (!target) {
+      state = cancelConfirm(state);
+      draw();
+      return;
+    }
+    if (selectedProviderAction(state) === "edit") {
+      const editState = beginProviderEdit(state);
+      if (!editState) return;
+      state = editState;
+      draw();
+      await runSuspended(`编辑供应商 ${target.name}`, () => editCommand(target.name));
+      return;
+    }
+    state = beginRemoveProviderConfirm(state);
     draw();
   };
 
@@ -435,12 +465,19 @@ export async function startTui(): Promise<void> {
     // 动作进行中忽略所有导航与动作键（含 q/r），只有 Ctrl-C 能退出。
     if (state.switching) return;
 
-    // 确认态：只认 Enter 确认 / Esc 取消，其余按键（含 q/r/方向键）一律忽略。
+    // 确认态：只认 Enter 确认 / Esc 取消，其余按键（含 q/r）一律忽略。
+    // 「供应商操作」菜单额外接受 ↑/↓ 在两个选项间移动。
     if (state.confirming) {
+      if (state.confirming === "provider-action" && (key.name === "down" || key.name === "up")) {
+        state = moveProviderAction(state, key.name === "down" ? 1 : -1);
+        draw();
+        return;
+      }
       if (key.name === "return" || key.name === "enter") {
         if (state.confirming === "switch") void confirmSwitch();
         else if (state.confirming === "routing") void confirmRouting();
         else if (state.confirming === "restart") void confirmRestart();
+        else if (state.confirming === "provider-action") void runProviderAction();
         else if (state.confirming === "remove-provider") void confirmRemoveProvider();
       } else if (key.name === "escape") {
         state = cancelConfirm(state);

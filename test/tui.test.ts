@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import {
   beginRestart,
   beginRestartConfirm,
+  beginProviderAction,
+  beginProviderEdit,
   beginRemoveProvider,
   beginRemoveProviderConfirm,
   beginRouting,
@@ -16,11 +18,13 @@ import {
   finishSuspended,
   focusNext,
   focusPrev,
+  moveProviderAction,
   moveSelection,
   parseStatusSnapshot,
   pushEvent,
   restoreStatsView,
   selectedProvider,
+  selectedProviderAction,
   selectedStatsIndex,
   selectedStatsTarget,
   statsTargets,
@@ -187,7 +191,7 @@ test("渲染包含状态且不泄露密钥", () => {
   assert.match(output, /当前激活/);
   assert.match(output, /↑↓ 选中/);
   assert.match(output, /\[ 模型 \]/);
-  assert.match(output, /\[ 路由 \]/);
+  assert.match(output, /\[ 模式 \]/);
   assert.match(output, /2026-09-27T00:00:00\.000Z/);
   assert.doesNotMatch(output, /secret-key/);
 });
@@ -408,24 +412,24 @@ test("处理中… 只出现在 switching 状态，动作结束后不再残留",
   assert.doesNotMatch(finished, /处理中…/);
 });
 
-test("状态区展示模型路由模式，且与 useClientModel 一致", () => {
+test("状态区展示模型模式，且与 useClientModel 一致", () => {
   const entries = buildCatalog(config);
   const clientMode = renderTui(createTuiState(entries, status, true), { height: 24, width: 80 });
   const unifiedMode = renderTui(createTuiState(entries, status, false), { height: 24, width: 80 });
 
-  assert.match(clientMode, /模型路由\s+按客户端请求/);
+  assert.match(clientMode, /模型模式\s+按客户端请求/);
   assert.doesNotMatch(clientMode, /统一用当前模型/);
-  assert.match(unifiedMode, /模型路由\s+统一用当前模型/);
+  assert.match(unifiedMode, /模型模式\s+统一用当前模型/);
   assert.doesNotMatch(unifiedMode, /按客户端请求/);
 });
 
-test("离线状态区同样展示模型路由模式", () => {
+test("离线状态区同样展示模型模式", () => {
   const output = renderTui(createTuiState(buildCatalog(config), null, false), {
     height: 24,
     width: 80,
   });
 
-  assert.match(output, /模型路由\s+统一用当前模型/);
+  assert.match(output, /模型模式\s+统一用当前模型/);
 });
 
 test("路由页 Enter 进入路由确认态，Esc 取消且不影响 switch 确认", () => {
@@ -514,7 +518,7 @@ test("路由确认态文案说明后果", () => {
 
   assert.match(toUnified, /当前模式\s+按客户端请求/);
   assert.match(toUnified, /切换为「统一用当前模型」？客户端请求的模型将被忽略。/);
-  assert.match(toUnified, /切换模型路由/);
+  assert.match(toUnified, /切换模型模式/);
   assert.match(toClient, /当前模式\s+统一用当前模型/);
   assert.match(toClient, /切换为「按客户端请求」？客户端写的模型名会生效。/);
 });
@@ -574,16 +578,30 @@ test("页脚只提示基础按键，不再出现 m 或 y/n 动作键", () => {
   assert.doesNotMatch(output, /y 确认/);
 });
 
-test("渲染导航栏并标记路由页内容", () => {
+test("渲染导航栏并标记模式页内容，且说明 warp 写法", () => {
   const routing = renderTui(
     openRoutingPage(createTuiState(buildCatalog(config), status, true)),
     { height: 24, width: 80 },
   );
 
-  assert.match(routing, /模型路由/);
+  assert.match(routing, /模型模式/);
   assert.match(routing, /按客户端请求/);
   assert.match(routing, /统一用当前模型/);
+  assert.match(routing, /warp/);
+  assert.match(routing, /\{供应商\}\/\{模型\}/);
   assert.doesNotMatch(routing, /secret-key/);
+  // 页面不再出现用户可见的「路由」，且提示用「Enter 切换模式」
+  assert.doesNotMatch(routing, /路由/);
+  assert.match(routing, /Enter 切换模式/);
+
+  // 最小终端宽（72）下，模式页说明不被面板截断
+  const narrow = renderTui(
+    openRoutingPage(createTuiState(buildCatalog(config), status, true)),
+    { height: 24, width: 72 },
+  );
+  assert.match(narrow, /warp 或留空 → 当前激活模型/);
+  assert.match(narrow, /\{供应商\}\/\{模型\} → 指定模型/);
+  assert.match(narrow, /统一用当前模型：忽略 model/);
 });
 
 test("右下角反馈区显示动作结果：成功与失败都要可见", () => {
@@ -616,40 +634,65 @@ test("反馈区保留最近事件且不打断确认流程", () => {
   assert.match(out, /重启守护进程/);
 });
 
-test("供应商页 ↑↓ 覆盖供应商行与添加/删除按钮行", () => {
+test("供应商页 ↑↓ 覆盖供应商行与添加行（0..providers.length）", () => {
   let state = openProvidersPage(createTuiState(buildCatalog(config), status, true, providerList));
   assert.equal(state.page, "providers");
   assert.equal(state.focus, "list");
   assert.equal(state.providerCursor, 0);
+  assert.equal(selectedProvider(state)?.name, "ark");
 
-  // 行 0/1 = 供应商；行 2 = [添加]；行 3 = [删除]
+  // 行 0/1 = 供应商；行 2 = [ + 添加供应商 ]
   state = moveSelection(state, 1);
   assert.equal(state.providerCursor, 1);
-  assert.equal(state.providerSelected, 1);
-  state = moveSelection(state, 1);
-  assert.equal(state.providerCursor, 2);
-  assert.equal(state.providerSelected, 1, "移到按钮行时保留删除目标");
-  state = moveSelection(state, 1);
-  assert.equal(state.providerCursor, 3);
   assert.equal(selectedProvider(state)?.name, "deepseek");
   state = moveSelection(state, 1);
-  assert.equal(state.providerCursor, 3, "越界收敛到最后一行");
+  assert.equal(state.providerCursor, 2);
+  assert.equal(selectedProvider(state), null, "添加行没有供应商目标");
+  state = moveSelection(state, 1);
+  assert.equal(state.providerCursor, 2, "越界收敛到添加行");
   state = moveSelection(state, -5);
   assert.equal(state.providerCursor, 0);
-  assert.equal(state.providerSelected, 0);
 });
 
-test("删除确认只在[删除]行进入，且需要二次确认", () => {
+test("操作菜单只在供应商行打开，[添加] 行不打开", () => {
   let state = openProvidersPage(createTuiState(buildCatalog(config), status, true, providerList));
-  // 供应商行不进入删除确认
-  assert.equal(beginRemoveProviderConfirm(state).confirming, null);
-  assert.equal(beginRemoveProvider(state), null);
+  // 光标停在 [添加] 行：不打开菜单
+  assert.equal(beginProviderAction({ ...state, providerCursor: state.providers.length }).confirming, null);
+  // 供应商行：打开菜单，默认高亮「编辑」
+  state = beginProviderAction(state);
+  assert.equal(state.confirming, "provider-action");
+  assert.equal(state.providerActionIndex, 0);
+  assert.equal(selectedProviderAction(state), "edit");
+  // 菜单打开期间导航一律忽略
+  assert.equal(focusNext(state), state);
+  assert.equal(focusPrev(state), state);
+  assert.equal(moveSelection(state, 1), state);
+  // ↑↓ 在两个选项间移动并收敛
+  assert.equal(moveProviderAction(state, 1).providerActionIndex, 1);
+  assert.equal(moveProviderAction(state, 5).providerActionIndex, 1);
+  assert.equal(moveProviderAction(state, -5).providerActionIndex, 0);
+  // Esc 关闭菜单且无副作用
+  const cancelled = cancelConfirm(state);
+  assert.equal(cancelled.confirming, null);
+  assert.equal(cancelled.providerCursor, 0);
+  assert.equal(selectedProvider(cancelled)?.name, "ark");
+});
 
-  state = { ...state, providerCursor: providerList.length + 1, providerSelected: 1 };
-  const confirming = beginRemoveProviderConfirm(state);
+test("选「编辑」走 edit 在途路径；选「删除」进入二次确认", () => {
+  let state = openProvidersPage(createTuiState(buildCatalog(config), status, true, providerList));
+  // 默认「编辑」：进入 switching，交由挂起流程执行
+  const editing = beginProviderEdit(beginProviderAction(state));
+  assert.ok(editing);
+  assert.equal(editing?.switching, true);
+  assert.equal(editing?.confirming, null);
+
+  // 「删除」：不是 edit 动作，beginProviderEdit 拒绝
+  const removeSelected = moveProviderAction(beginProviderAction(state), 1);
+  assert.equal(beginProviderEdit(removeSelected), null);
+  // 进入删除二次确认，目标就是当前高亮的供应商
+  const confirming = beginRemoveProviderConfirm(removeSelected);
   assert.equal(confirming.confirming, "remove-provider");
-  // 确认态下导航被忽略
-  assert.equal(focusNext(confirming), confirming);
+  assert.equal(focusNext(confirming), confirming, "确认态下导航被忽略");
 
   const running = beginRemoveProvider(confirming);
   assert.ok(running);
@@ -660,29 +703,44 @@ test("删除确认只在[删除]行进入，且需要二次确认", () => {
   assert.equal(cancelConfirm(confirming).confirming, null);
 });
 
-test("供应商页渲染供应商、模型数与操作按钮；删除确认显示目标", () => {
+test("回归：删除非最后一个供应商时目标不是最后一个", () => {
+  let state = openProvidersPage(createTuiState(buildCatalog(config), status, true, providerList));
+  assert.equal(state.providerCursor, 0, "光标停在第 0 个供应商");
+
+  // 打开菜单 → 选「删除」→ 二次确认
+  state = moveProviderAction(beginProviderAction(state), 1);
+  const confirming = beginRemoveProviderConfirm(state);
+  assert.equal(confirming.confirming, "remove-provider");
+  assert.equal(selectedProvider(confirming)?.name, "ark", "删除目标必须是第 0 个供应商");
+
+  const out = renderTui(confirming, { height: 30, width: 90 });
+  assert.match(out, /将要删除供应商\s+ark/);
+  assert.doesNotMatch(out, /将要删除供应商\s+deepseek/);
+});
+
+test("供应商页渲染操作菜单；不再有固定的删除行", () => {
   let state = openProvidersPage(createTuiState(buildCatalog(config), status, true, providerList));
   const page = renderTui(state, { height: 30, width: 90 });
   assert.match(page, /供应商管理/);
   assert.match(page, /ark/);
   assert.match(page, /2 模型/);
   assert.match(page, /添加供应商/);
-  assert.match(page, /删除/);
+  assert.doesNotMatch(page, /\[ - 删除/);
+  assert.match(page, /Enter 打开操作菜单/);
   assert.doesNotMatch(page, /secret-key/);
 
-  state = { ...state, providerCursor: providerList.length + 1, providerSelected: 0 };
-  const confirming = renderTui(beginRemoveProviderConfirm(state), { height: 30, width: 90 });
-  assert.match(confirming, /删除供应商/);
-  assert.match(confirming, /将要删除供应商\s+ark/);
-  assert.match(confirming, /Enter 确认删除\s+Esc 取消/);
+  // 菜单标题为供应商名，两项带高亮
+  const menu = renderTui(beginProviderAction(state), { height: 30, width: 90 });
+  assert.match(menu, /ark/);
+  assert.match(menu, /▸ 编辑/);
+  assert.match(menu, /删除/);
+  assert.match(menu, /Enter 执行\s+Esc 取消/);
 });
 
 test("挂起动作结束必须清除在途标志并写入结果（删除路径回归）", () => {
-  const confirming = beginRemoveProviderConfirm({
-    ...openProvidersPage(createTuiState(buildCatalog(config), status, true, providerList)),
-    providerCursor: providerList.length + 1,
-    providerSelected: 0,
-  });
+  const base = openProvidersPage(createTuiState(buildCatalog(config), status, true, providerList));
+  const confirming = beginRemoveProviderConfirm(moveProviderAction(beginProviderAction(base), 1));
+  assert.equal(confirming.confirming, "remove-provider");
   const running = beginRemoveProvider(confirming);
   assert.ok(running);
   assert.equal(running?.switching, true);
@@ -697,7 +755,7 @@ test("挂起动作结束必须清除在途标志并写入结果（删除路径�
   assert.equal(failed.events[0]?.kind, "error");
 });
 
-test("导航栏现在是 模型 / 路由 / 供应商 / 统计 四页循环", () => {
+test("导航栏现在是 模型 / 模式 / 供应商 / 统计 四页循环", () => {
   let state = createTuiState(buildCatalog(config), status, true, providerList);
   state = focusPrev(state); // list → nav（停在模型页）
   assert.equal(state.focus, "nav");

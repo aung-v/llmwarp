@@ -1,5 +1,6 @@
 import type { TuiPage, TuiState } from "./model.js";
 import {
+  PROVIDER_ACTIONS,
   ROUTING_OPTIONS,
   selectedEntry,
   selectedProvider,
@@ -117,7 +118,7 @@ function navTabs(state: TuiState): string {
     : state.focus === "nav"
       ? pc.dim("  ←→ 换页  ↑↓ 进入列表")
       : "";
-  return `${tab("models", "模型")} ${tab("routing", "路由")} ${tab("providers", "供应商")} ${tab("stats", "统计")}${hint}`;
+  return `${tab("models", "模型")} ${tab("routing", "模式")} ${tab("providers", "供应商")} ${tab("stats", "统计")}${hint}`;
 }
 
 function modelRows(state: TuiState, height: number): string[] {
@@ -185,10 +186,14 @@ function routingRows(state: TuiState): string[] {
     }
   }
   rows.push("");
-  rows.push(pc.dim("按客户端请求：使用请求里写的模型名"));
-  rows.push(pc.dim("统一用当前模型：忽略请求里的模型名"));
+  rows.push(pc.dim("客户端 model 可写："));
+  rows.push(pc.dim("warp 或留空 → 当前激活模型"));
+  rows.push(pc.dim("{供应商}/{模型} → 指定模型"));
   rows.push("");
-  rows.push(pc.dim("Enter 切换路由模式  ←→ 换区"));
+  rows.push(pc.dim("按客户端请求：以上都生效"));
+  rows.push(pc.dim("统一用当前模型：忽略 model"));
+  rows.push("");
+  rows.push(pc.dim("Enter 切换模式  ←→ 换区"));
   return rows;
 }
 
@@ -211,14 +216,8 @@ function providersRows(state: TuiState): string[] {
 
   rows.push("");
   row(state.providerCursor === state.providers.length, "[ + 添加供应商 ]", true);
-  const target = state.providers[state.providerSelected];
-  row(
-    state.providerCursor === state.providers.length + 1,
-    `[ - 删除${target ? ` ${sanitize(target.name)}` : ""} ]`,
-    true,
-  );
   rows.push("");
-  rows.push(pc.dim("↑↓ 选择  Enter 编辑 / 添加 / 删除"));
+  rows.push(pc.dim("↑↓ 选择  Enter 打开操作菜单"));
   return rows;
 }
 
@@ -231,7 +230,7 @@ function restartButton(state: TuiState): string {
 
 function daemonRows(state: TuiState): string[] {
   const status = state.status;
-  const routing = `模型路由  ${routingLabel(state.useClientModel)}`;
+  const routing = `模型模式  ${routingLabel(state.useClientModel)}`;
   const button = restartButton(state);
   const buttonHint = state.switching
     ? pc.dim("处理中…")
@@ -527,6 +526,21 @@ function confirmationRows(state: TuiState): string[] {
         ];
   }
 
+  if (state.confirming === "provider-action") {
+    const target = selectedProvider(state);
+    if (!target) return ["该供应商已不存在", "", "Esc 取消"];
+    const options = PROVIDER_ACTIONS.map((option, index) =>
+      index === state.providerActionIndex ? `▸ ${option.label}` : `  ${option.label}`,
+    );
+    return [
+      `供应商  ${sanitize(target.name)}`,
+      "",
+      ...options,
+      "",
+      "Enter 执行    Esc 取消",
+    ];
+  }
+
   if (state.confirming === "remove-provider") {
     const target = selectedProvider(state);
     return target
@@ -615,7 +629,7 @@ export function renderTui(
     body = panel("用量统计", statsRows(state, mainHeight - 2, width - 4), width, mainHeight);
   } else {
     const listTitle =
-      state.page === "providers" ? "供应商管理" : state.page === "routing" ? "模型路由" : "可切换模型";
+      state.page === "providers" ? "供应商管理" : state.page === "routing" ? "模型模式" : "可切换模型";
     const listRows =
       state.page === "providers"
         ? providersRows(state)
@@ -653,22 +667,28 @@ export function renderTui(
     ? "处理中… 请稍候（Ctrl-C 可退出）"
     : state.page === "stats"
       ? "↑↓ 选择目标  Enter 指标  h 天/小时  ←→ 换页  r 刷新  q 退出"
-      : "↑↓ 选中  ←→ 换区/换页  Enter 确认  Esc 取消  r 刷新  q 退出";
+      : state.page === "providers"
+        ? "↑↓ 选中  Enter 打开操作菜单  ←→ 换页  r 刷新  q 退出"
+        : "↑↓ 选中  ←→ 换区/换页  Enter 确认  Esc 取消  r 刷新  q 退出";
   const message = state.message && !state.switching && !state.confirming ? state.message : null;
   const footerText = message
     ? `${sanitize(message)}    ${keyHint}`
     : keyHint;
   const footer = [pc.dim(truncate(footerText, width))];
 
+  const providerActionTarget =
+    state.confirming === "provider-action" ? selectedProvider(state) : null;
   const noticeTitle = state.switching
     ? "处理中"
-    : state.confirming === "routing"
-      ? "切换模型路由"
-      : state.confirming === "restart"
-        ? "重启守护进程"
-        : state.confirming === "remove-provider"
-          ? "删除供应商"
-        : "确认切换";
+    : state.confirming === "provider-action"
+      ? (providerActionTarget ? sanitize(providerActionTarget.name) : "供应商操作")
+      : state.confirming === "routing"
+        ? "切换模型模式"
+        : state.confirming === "restart"
+          ? "重启守护进程"
+          : state.confirming === "remove-provider"
+            ? "删除供应商"
+            : "确认切换";
   const noticeRows =
     notice.length > 0
       ? panel(noticeTitle, notice, width, notice.length + 2)
