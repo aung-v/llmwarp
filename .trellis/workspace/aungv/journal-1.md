@@ -745,8 +745,8 @@ Follow-up to the stats feature, done outside a Trellis task at the user's reques
 
 ### Main Changes
 
-- 表头  /  恢复为  / ，数值列宽回到 6 / 7（数值列合计 30 列，含端点 47 列），labelWidth 常量同步 33->30 / 50->47（端点显示门槛仍是 width-50>=20，保持不变）
-- 当前统计范围总计块同步： -> ， -> ；口径 / 列义两行保留，列义改为解释缩写（TTFT = 首字延迟…；tok/s = 输出速度…）
+- 表头 `首字延迟` / `输出速度` 恢复为 `TTFT` / `tok/s`，数值列宽回到 6 / 7（数值列合计 30 列，含端点 47 列），labelWidth 常量同步 33->30 / 50->47（端点显示门槛仍是 width-50>=20，保持不变）
+- 当前统计范围总计块同步：`首字延迟 200ms` -> `TTFT 200ms`，`输出速度 25 tok/s` -> `25 tok/s`；口径 / 列义两行保留，列义改为解释缩写（TTFT = 首字延迟…；tok/s = 输出速度…）
 - 55d4e76 其余取舍不动：总耗时列仍不进表格、统计页仍无选中态、统计范围仍叫统计范围
 - 同步 README 与 .trellis/spec（backend/usage-stats 字段矩阵 + 列宽 + 测试要点、frontend/interaction-guidelines 列名）
 
