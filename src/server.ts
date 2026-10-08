@@ -1,4 +1,5 @@
 import http from "node:http";
+import { readFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import {
   loadConfig,
@@ -22,7 +23,14 @@ import { classifyRoute, type RequestEvent, type RouteKind, type Termination } fr
 import { StatsCollector } from "./stats/collect.js";
 import type { Aggregate } from "./stats/aggregate.js";
 
-export const VERSION = "1.1.0";
+/**
+ * 单一来源：版本只在 package.json 里维护。
+ * `../package.json` 相对本文件解析——tsx 直跑源码时是仓库根，被 tsup 打进
+ * `dist/` 后是包根（`files` 白名单已含 package.json），两条路径都成立。
+ */
+export const VERSION = (
+  JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }
+).version;
 const ADMIN_PREFIX = "/_llmwarp/";
 
 class RouterState {

@@ -24,3 +24,7 @@ This project has a backend/CLI core and a terminal frontend. There is no databas
 - Keep runtime dependencies small. Current runtime dependencies are Commander, Inquirer, JSONC parser, and Picocolors.
 - Prefer Node built-ins for platform behavior already covered by `http`, `fs`, `os`, `path`, `crypto`, and `stream`.
 - Keep CLI-facing wording in Chinese when it extends the existing experience.
+- Version numbers live only in `package.json`. `src/server.ts` reads it at runtime via
+  `new URL("../package.json", import.meta.url)` (works both from `src/` under tsx and from the
+  bundled `dist/` chunk) and exports `VERSION`; do not hardcode a version string in `src/`.
+  A regression test in `test/server.test.ts` pins `VERSION` to the repo-root `package.json`.

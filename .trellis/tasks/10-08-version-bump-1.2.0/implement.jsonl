@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "确认模块边界：VERSION 属于 server/services 层，版本单源改造的落点"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "提交前的 typecheck/test/build 门禁要求"}

@@ -12,7 +12,7 @@ process.env.XDG_CONFIG_HOME = home;
 process.env.MY_TEST_KEY = "upstream-secret";
 
 const { CONFIG_DIR, CONFIG_PATH } = await import("../src/config.js");
-const { startServer } = await import("../src/server.js");
+const { startServer, VERSION } = await import("../src/server.js");
 
 const socketSkip = await skipWithoutSockets();
 
@@ -157,6 +157,7 @@ test("代理：改写 model、注入密钥、透传 SSE、管理端点鉴权", {
   assert.equal(authorized.status, 200);
   const status = (await authorized.json()) as {
     active: { provider: string; model: string };
+    version: string;
     metrics: {
       totalRequests: number;
       totalErrors: number;
@@ -179,6 +180,7 @@ test("代理：改写 model、注入密钥、透传 SSE、管理端点鉴权", {
   };
   assert.equal(status.active.provider, "fake");
   assert.equal(status.active.model, "real-model");
+  assert.equal(status.version, VERSION);
   assert.equal(status.metrics.totalRequests, 2);
   assert.equal(status.metrics.totalErrors, 0);
   assert.equal(status.metrics.recent[0]?.method, "POST");
@@ -695,4 +697,11 @@ test("统计：Responses 终态为 failed 记为错误而非成功", { skip: soc
   assert.equal(events[0].finishReason, "error");
   assert.equal(events[0].status, 200);
   assert.equal(events[0].ok, false);
+});
+
+test("VERSION 单源：与仓库根 package.json 的 version 一致", () => {
+  const pkg = JSON.parse(
+    readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+  ) as { version: string };
+  assert.equal(VERSION, pkg.version);
 });
