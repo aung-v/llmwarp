@@ -1,168 +1,157 @@
 # llmwarp
 
-> 本地 OpenAI 协议路由，随时切换 LLM API 供应商。
+> A local OpenAI-compatible router for LLM APIs. Point your client at `localhost` once, then switch providers and models with a single command.
 
-只改一次客户端配置：Codex 等任意 OpenAI 兼容客户端指向本机的
-`http://127.0.0.1:<port>/v1`（端口可配，默认 `8787`），之后用 `llmwarp` 一键切换「用哪家、用哪个模型」。
+Client base URLs and model names are usually hardcoded, so every provider change means editing config and restarting. llmwarp runs a small daemon on your machine that speaks the OpenAI protocol, and forwards each request to whichever provider you have currently selected.
+
+[中文说明](https://github.com/aung-v/llmwarp/blob/master/docs/README.zh-CN.md)
 
 ![llmwarp TUI](https://raw.githubusercontent.com/aung-v/llmwarp/master/assets/llmwarp-tui.png)
 
-## 它解决什么问题
-
-- 客户端（Codex、各类 OpenAI SDK、编辑器插件……）的 base URL 与模型名通常写死在配置里，换供应商就得改一次。
-- llmwarp 在本机起一个 OpenAI 兼容端点，把客户端发来的 `model` 路由到对应供应商：填 `warp` 用你当前选中的模型，填 `{provider}/{model}` 用指定的模型，并用你为该供应商配置的 key 转发。
-- 于是客户端的 `baseUrl` 固定为本机、`apiKey` 随便填、`model` 从 `GET /v1/models` 里挑；切换只发生在 llmwarp 侧，**客户端无需重启**。
-
-## 工作原理
+## How it works
 
 ```
-OpenAI 兼容客户端 ──▶ 127.0.0.1:<port>/v1 ──▶ llmwarp 守护进程 ──▶ 当前供应商（OpenAI 兼容）
-      ◀── SSE 流式回传 ◀── 改写 model / 注入 apiKey ◀──
-                                  ▲
-                                  │ 回环 + token 的本地管理请求
-                            llmwarp CLI / TUI
+  OpenAI-compatible client            model rewritten,
+  (Codex, SDKs, editor plugins)       provider key injected
+              |                              |
+              |  http://127.0.0.1:8787/v1    v
+              +------------------------>  llmwarp daemon  ---------->  provider API
+                                             ^      |
+              <---- SSE streamed back -------+      |
+                                             |
+                                       loopback + token
+                                             |
+                                     llmwarp CLI / TUI
 ```
 
-- 仅监听 `127.0.0.1`，不对外暴露。
-- 监听端口取自配置的 `port`，未配置时默认 `8787`；以 `llmwarp status` 显示的接入地址为准。
-- 上游 URL = `joinUrl(baseUrl, 客户端路径去掉 /v1 前缀)`。例：`baseUrl = https://api.deepseek.com/v1`，请求 `/v1/chat/completions` → `https://api.deepseek.com/v1/chat/completions`；`baseUrl` 不要求以 `/v1` 结尾。
-- JSON 请求体里的 `model` 决定路由：`warp`（或缺失）用当前激活模型，`{provider}/{model}` 用指定供应商的模型（只按第一个 `/` 拆分），上游收到的 `model` 会去掉供应商前缀。名字必须是 `GET /v1/models` 列出的值，否则返回本地 JSON 错误、不转发上游；响应（含 SSE）边收边发，不缓冲。当 TUI「模式」页选到「统一用当前模型」时，客户端写的 `model` 名会被忽略，一律使用当前激活模型。
-- 请求开始时快照当前供应商/模型，切换不影响进行中的请求。
+- The daemon binds `127.0.0.1` only, and never listens on external interfaces.
+- The JSON body's `model` decides routing: `warp` (or omitted) uses your current selection, `{provider}/{model}` uses that provider's model. Anything else returns a local JSON error and is never forwarded.
+- Upstream URL = `baseUrl` + the client path with its `/v1` prefix removed. `baseUrl` does not have to end in `/v1`: `https://api.deepseek.com/v1` with a request to `/v1/chat/completions` becomes `https://api.deepseek.com/v1/chat/completions`.
+- Responses, including SSE, are streamed straight through - nothing is buffered.
+- The provider and model are snapshotted when a request starts, so switching mid-flight never disturbs requests already running.
+- The TUI's mode page can force every request to the current model, ignoring whatever model name the client sends.
 
-## 安装
+## Install
 
-需要 Node.js 20+。
+Requires Node.js 20 or newer.
 
 ```bash
-npm install -g llmwarp   # 全局安装，得到 llmwarp 命令
-npx llmwarp status       # 不想全局安装时，也可以用 npx 直接跑
+npm install -g llmwarp
+npx llmwarp status       # no global install needed
 ```
 
-从源码构建（开发用）：
+From source:
 
 ```bash
-npm install
-npm run build
-npm link        # 之后全局可用 llmwarp
+npm install && npm run build && npm link   # global `llmwarp` from this checkout
+npm run dev -- status                      # run the TypeScript sources directly
 ```
 
-开发时可直接跑源码，无需 build：
+## Quick start
 
 ```bash
-npm run dev -- status
+llmwarp init      # write a commented sample config
+llmwarp add       # add a provider (presets: OpenAI, DeepSeek, OpenRouter, Ollama)
+llmwarp use       # pick provider + model; starts the daemon if it is not running
+llmwarp status    # show the current state
 ```
 
-## 快速开始
+Then point your client at it:
 
-```bash
-llmwarp init      # 生成带注释的示例配置 ~/.config/llmwarp/config.jsonc
-llmwarp add       # 向导式新增供应商（预置 OpenAI / DeepSeek / OpenRouter / Ollama）
-llmwarp use       # 交互式选择供应商与模型；守护进程未运行会自动启动
-llmwarp status    # 查看当前状态
-```
-
-然后把客户端指过来：
-
-| 客户端字段 | 填写 |
+| Client setting | Value |
 | --- | --- |
-| Base URL | `http://127.0.0.1:<port>/v1`，默认 `8787`；准确值看 `llmwarp status` 的「接入地址」 |
-| API Key | 任意非空值（如 `any`）—— llmwarp 忽略它，改用供应商的 key |
-| Model | `warp`（用当前选择），或 `/v1/models` 里的 `{provider}/{model}` |
+| Base URL | `http://127.0.0.1:<port>/v1` - see the address printed by `llmwarp status`; default port is `8787` |
+| API Key | any non-empty string (e.g. `any`); llmwarp ignores it and uses the provider's key |
+| Model | `warp` for your current selection, or any `{provider}/{model}` from `GET /v1/models` |
 
 ```bash
-# 端口默认 8787；换成本机 `llmwarp status` 输出的「接入地址」
 curl http://127.0.0.1:8787/v1/chat/completions \
   -H 'content-type: application/json' \
   -d '{"model":"warp","messages":[{"role":"user","content":"hi"}]}'
 ```
 
-端口不是写死的：以配置文件里的 `"port"` 为准（未配置时用默认值 `8787`）；也可以用
-`llmwarp serve --port <n>` 前台运行并临时指定。启动守护进程或 `llmwarp use` 成功后都会打印真实接入地址，
-`llmwarp status` 也可随时查看。
+The port is not hardcoded: the daemon uses `"port"` from the config file (`8787` if unset), and `llmwarp serve --port <n>` overrides it for a single foreground run. Starting the daemon and a successful `llmwarp use` both print the address actually in use.
 
 ## TUI
 
-`llmwarp tui` 打开常驻管理界面（即上方截图）：顶部导航在「模型」「模式」「供应商」「统计」四页之间切换，左侧显示当前页的列表，右侧显示守护进程状态（含「模型模式」与「重启 daemon」按钮）、右下角的操作反馈与最近的 `/v1` 请求活动。按键只用方向键加 `Enter`/`Esc`/`r`/`q`，没有任何单字母动作快捷键。
+`llmwarp tui` opens the persistent management UI in the screenshot above.
 
-- `←` / `→` 在左栏与「守护进程」栏之间移动焦点；焦点在顶部导航时用于切换「模型」/「模式」/「供应商」/「统计」页
-- `↑` / `↓` 在当前页列表里选择（「统计」页是只读的、没有选中行，只需 `h` 切换统计范围）
-- `Enter` 触发当前项：切换模型、切换模式、重启 daemon 都是两步确认，进入确认后 `Enter` 确认、`Esc` 取消；「供应商」页的 `Enter` 打开操作菜单
-- 模式在「模式」页选择（`按客户端请求` / `统一用当前模型`）；状态区始终显示当前模式。它决定客户端请求体里的 `model` 名是否生效：填 `warp`（或留空）用当前激活模型，填 `{供应商}/{模型}` 用该供应商的指定模型；`按客户端请求` 让这两种写法生效，`统一用当前模型` 则忽略客户端写的模型名、一律落到当前激活模型
-- 「供应商」页支持管理供应商：光标停在某个供应商行按 `Enter` 打开操作菜单（标题为该供应商名，`↑`/`↓` 在 `编辑` / `删除` 间选择、`Enter` 执行、`Esc` 取消）；选 `编辑` 进入现有的 `llmwarp edit` 流程，选 `删除` 二次确认后调用 `llmwarp remove`，删除目标始终是当前高亮的供应商。`[ + 添加供应商 ]` 行进入 `llmwarp add`。这些流程会临时离开 TUI 用原来的交互跑（`$EDITOR`、多选都可用），跑完按任意键返回 TUI 并刷新
-- 守护进程栏的按钮运行中显示「重启 daemon」、离线时显示「启动 daemon」；必须先聚焦到按钮再按 `Enter`，不存在按一个键就直接重启的路径。重启确认会提示会中断进行中的 `/v1` 请求
-- 「统计」页顶部有统计范围选择器（`h` 循环，共 5 个）：`最近10条` / `近1小时` / `今天` / `近7天` / `近30天`；目标表（按 provider / model / endpoint 列出请求数、错误率、TTFT、tok/s）与下方「当前统计范围总计」都按当前统计范围重算。统计页是只读的，没有选中行。统计范围只作用于数字；火花线固定展示最近 30 天按天的 token 趋势，并标出最小 / 最大 / 当前。目标表与总计只覆盖真正发往上游的请求；路由失败（配置里不存在的模型/供应商，请求未发出）不计，只在命中行以「未发出 N」单独计数。表格**不放总耗时**（端到端耗时被回答长度主导，拿来比上游快慢会误导），它和 50 / 95 分位、tok/s（输出速度）、输入/输出/缓存/推理 token、请求 / 错误率 / 中断 / 截断 / 拦截一起留在「当前统计范围总计」里；表下方两行「口径 / 列义」说明这些数字统计了哪些请求、以及每列取的是哪些样本。客户端中途取消单独计为「中断」，不进错误率分母。统计落在 `~/.config/llmwarp/stats/YYYY-MM-DD.jsonl`，跨 daemon 重启保留，默认保留 30 天（`stats.retentionDays` 可配；`stats.enabled=false` 完全关闭采集并停止注入 `stream_options`）。过期文件只在 daemon 启动时清理一次，运行期没有任何定时或轮询触发的扫盘/读盘
-- `r` 手动刷新（默认每 3 秒自动刷新）
-- `q` 或 `Ctrl-C` 退出（退出不影响后台守护进程）
+- Four pages - 模型 Models / 模式 Mode / 供应商 Providers / 统计 Stats - selected with `<-` `->` at the top. `<-` `->` also moves focus between the left column and the daemon panel.
+- `up` / `down` select within the current page's list. The stats page has no selection, only the `h` range switch.
+- `Enter` acts on the highlighted item: switching model or mode and restarting the daemon all ask for confirmation (`Enter` confirms, `Esc` cancels); on the providers page it opens an action menu (edit / remove, remove asks again). `[ + 添加供应商 ]` starts `llmwarp add`.
+- The mode page picks 按客户端请求 or 统一用当前模型, and the daemon panel always shows which one is active. The daemon panel also shows 重启 daemon while the daemon runs, and 启动 daemon when it is down.
+- The stats page has a range selector cycled with `h`: 最近10条 / 近1小时 / 今天 / 近7天 / 近30天. The target table (request count, error rate, TTFT, tok/s per provider/model/endpoint) and the totals block below it are both recomputed for the selected range; the sparkline always shows the last 30 days of daily tokens, with min/max/current marked.
+- Only requests actually forwarded upstream are counted; routing failures are reported separately as 未发出 N. Cancelled clients count as 中断 and stay out of the error-rate denominator. End-to-end latency is deliberately not shown per target - answer length dominates it, which makes cross-provider comparison misleading.
+- `r` refreshes (auto-refresh runs every 3 seconds), `q` or `Ctrl-C` exits without stopping the daemon. The UI only uses arrow keys plus `Enter` / `Esc` / `h` / `r` / `q`; there are no single-letter action shortcuts.
 
-> 右侧「请求活动」是守护进程内存里的实时指标（最近 60 秒的请求数 / 错误数与平均耗时，以及本次运行以来的累计），daemon 重启后清零；「统计」页的历史聚合数据来自落盘 JSONL，跨 daemon 重启保留。两者口径不同：面板是实时窗口，统计页按选定的统计范围。
+History is stored as JSONL under `~/.config/llmwarp/stats/YYYY-MM-DD.jsonl` and survives daemon restarts (30 days by default; `stats.retentionDays` configures it, `stats.enabled=false` turns collection off entirely). Expired files are pruned once at daemon startup - nothing scans or reads the directory while running.
 
-## 命令
+> The 请求活动 panel on the right is in-memory and realtime (last 60 seconds, plus totals since this daemon started) and resets on restart; the stats page is historical and range-based. They intentionally do not share a definition.
 
-| 命令 | 说明 |
+## Commands
+
+| Command | Purpose |
 | --- | --- |
-| `llmwarp` | 无参数时打开交互式菜单 |
-| `llmwarp init [--force]` | 生成带注释的示例配置 |
-| `llmwarp add` | 向导式新增供应商 |
-| `llmwarp edit [provider] [--file]` | 编辑供应商，或用 `$EDITOR` 打开配置文件 |
-| `llmwarp list`（`ls`）`[--offline]` | 列出供应商，并检查可用性 |
-| `llmwarp use [provider] [--model <m>] [--list] [--refresh]` | 切换供应商/模型 |
-| `llmwarp status`（`st`） | 查看配置路径、端口、接入地址、当前供应商/模型 |
-| `llmwarp tui` | 打开常驻管理界面 |
-| `llmwarp remove [provider]`（`rm`） | 移除供应商 |
-| `llmwarp start` / `llmwarp stop` | 后台启动 / 停止守护进程 |
-| `llmwarp serve [--port <n>]` | 前台运行守护进程 |
-| `llmwarp reload` | 让守护进程重载配置 |
+| `llmwarp` | interactive menu when run with no arguments |
+| `llmwarp init [--force]` | write a commented sample config |
+| `llmwarp add` | add a provider with a wizard |
+| `llmwarp edit [provider] [--file]` | edit a provider, or open the config in `$EDITOR` |
+| `llmwarp list` (`ls`) `[--offline]` | list providers and check availability |
+| `llmwarp use [provider] [--model <m>] [--list] [--refresh]` | switch provider / model |
+| `llmwarp status` (`st`) | config path, port, base URL, current provider and model |
+| `llmwarp tui` | open the management UI |
+| `llmwarp remove [provider]` (`rm`) | remove a provider |
+| `llmwarp start` / `llmwarp stop` | start / stop the daemon in the background |
+| `llmwarp serve [--port <n>]` | run the daemon in the foreground |
+| `llmwarp reload` | make the daemon reload the config |
 
-## 配置
+## Configuration
 
-配置文件位于 `~/.config/llmwarp/config.jsonc`（遵循 XDG：优先 `$XDG_CONFIG_HOME/llmwarp`），
-JSONC 格式，支持 `//` 注释与尾逗号：
+The config lives at `~/.config/llmwarp/config.jsonc` (XDG-aware: `$XDG_CONFIG_HOME/llmwarp` wins). It is JSONC, so `//` comments and trailing commas are allowed:
 
 ```jsonc
 {
-  "port": 8787,                      // 监听端口，可改；不写则用默认 8787
-  "activeProvider": "deepseek",      // 由 llmwarp use 维护
+  "port": 8787,                      // listen port; defaults to 8787 when omitted
+  "activeProvider": "deepseek",      // maintained by llmwarp use
   "activeModel": "deepseek-chat",
-  "useClientModel": true,            // true 尊重客户端指定的模型；false 统一落到当前激活模型
+  "useClientModel": true,            // true: honor the model the client sends; false: always use the active one
   "providers": {
     "deepseek": {
       "baseUrl": "https://api.deepseek.com/v1",
-      "apiKey": "${DEEPSEEK_API_KEY}", // 支持 ${ENV_VAR} 引用环境变量，避免明文落盘
+      "apiKey": "${DEEPSEEK_API_KEY}", // ${ENV_VAR} interpolation keeps secrets off disk
       "models": ["deepseek-chat", "deepseek-reasoner"]
     }
   }
 }
 ```
 
-- 手改配置后运行 `llmwarp reload`；或用 `llmwarp edit --file` 在 `$EDITOR` 中打开，保存后自动 reload。
-- `models` 可省略：此时 `llmwarp use`（或 `--refresh`）会请求 `<baseUrl>/models` 拉取模型列表。
-- `GET /v1/models` 本地返回 `warp` 与所有 `{provider}/{model}`（不含密钥）；`useClientModel` 两种取值下，客户端传的 `model` 都必须是这个列表里的名字。
-- 名字规则：供应商名不能含 `/`（第一个 `/` 是路由分隔符）、空白或控制字符，`llmwarp add` 会直接拒绝这类名字；模型名不能含空白或控制字符，否则不会出现在 `/v1/models` 里。写入端统一在 `updateActive()` 把关：`llmwarp use`（含 `--model`）会提示重输或直接报错，`llmwarp add`/TUI 遇到非法模型名则只警告、不激活。非法模型名不会被写成 `activeModel`（配置文件里遗留的非法 `provider.models` 条目只会警告，并从 `/v1/models` 中过滤掉）。
-- 配置文件写入权限为 `0600`、配置目录为 `0700`；密钥建议用 `${ENV_VAR}` 而非明文。
-- 守护进程运行时状态在 `~/.config/llmwarp/daemon.json`（含本机管理接口 token），日志在 `~/.config/llmwarp/daemon.log`。
+- After editing by hand, run `llmwarp reload`; `llmwarp edit --file` opens the file in `$EDITOR` and reloads on save.
+- `models` is optional - without it, `llmwarp use` (or `--refresh`) fetches `<baseUrl>/models`.
+- `GET /v1/models` returns `warp` plus every `{provider}/{model}`, and never exposes keys. Whatever the client sends must appear in that list, in either mode.
+- Provider names cannot contain `/` (the first `/` is the routing separator), whitespace or control characters; model names cannot contain whitespace or control characters.
+- The config file is written `0600` and its directory `0700`. Prefer `${ENV_VAR}` over plaintext keys.
+- While the daemon runs: state in `~/.config/llmwarp/daemon.json` (holds the loopback admin token), logs in `~/.config/llmwarp/daemon.log`.
 
-## 开发
+## Development
 
 ```bash
-npm run dev        # tsx 直接运行 src/cli.ts
-npm test           # node --test（test/*.test.ts）
+npm run dev        # run src/cli.ts through tsx
+npm test           # node --test (test/*.test.ts)
 npm run typecheck  # tsc --noEmit
-npm run build      # tsup 打包到 dist/cli.js
+npm run build      # bundle to dist/cli.js with tsup
 ```
 
-源码结构：
-
-| 路径 | 职责 |
+| Path | Responsibility |
 | --- | --- |
-| `src/cli.ts` | 命令注册（Commander） |
-| `src/commands.ts` | 各子命令实现 |
-| `src/config.ts` | 配置读写、校验、路径 |
-| `src/server.ts` | 守护进程：代理入口 + 管理接口 |
-| `src/proxy.ts` | 转发、model 改写、请求/响应头处理 |
-| `src/daemon.ts` | 守护进程生命周期与管理请求 |
-| `src/tui/` | 常驻 TUI（状态、渲染、按键） |
-| `src/metrics.ts` | 进程内实时请求指标（右下角活动面板） |
-| `src/stats/` | 用量 / 性能 / 可靠性统计：事件解析、JSONL 落盘、聚合、采集 |
-| `src/health.ts`、`src/net.ts` | 可用性检查与端口占用排查 |
+| `src/cli.ts` | command registration (Commander) |
+| `src/commands.ts` | subcommand implementations |
+| `src/config.ts` | config read/write, validation, paths |
+| `src/server.ts` | daemon: proxy entrypoint + admin API |
+| `src/proxy.ts` | forwarding, model rewriting, header handling |
+| `src/daemon.ts` | daemon lifecycle and admin requests |
+| `src/tui/` | the persistent TUI (state, rendering, keys) |
+| `src/metrics.ts` | in-process realtime metrics (activity panel) |
+| `src/stats/` | usage / performance / reliability stats: parsing, JSONL, aggregation |
+| `src/health.ts`, `src/net.ts` | availability checks and port diagnostics |
 
-设计与任务文档位于 `docs/` 与 `.trellis/`。
+Design and task notes live in `docs/` and `.trellis/`.
