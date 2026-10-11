@@ -155,3 +155,7 @@ npm run build      # bundle to dist/cli.js with tsup
 | `src/health.ts`, `src/net.ts` | availability checks and port diagnostics |
 
 Design and task notes live in `docs/` and `.trellis/`.
+
+## Project status
+
+This is a personal project, and it already covers what I need for my own daily use. Without feedback, suggestions, or new requirements, there will be no further releases - the code stays as it is. Issues and ideas are still welcome; there is just no roadmap.
