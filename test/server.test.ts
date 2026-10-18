@@ -31,6 +31,7 @@ interface PersistedEvent {
   ttftMs: number | null;
   usage: { input: number; output: number; total: number } | null;
   finishReason: string | null;
+  inputFilter?: { image: number; audio: number; file: number; video: number };
 }
 
 /** 直接读落盘 JSONL：聚合快照不暴露 termination / ttftMs 的逐条取值。 */
@@ -704,4 +705,79 @@ test("VERSION 单源：与仓库根 package.json 的 version 一致", () => {
     readFileSync(new URL("../package.json", import.meta.url), "utf8"),
   ) as { version: string };
   assert.equal(VERSION, pkg.version);
+});
+
+test("代理：按 target 过滤媒体输入并写入统计", { skip: socketSkip }, async (t) => {
+  resetStatsDir();
+  const seen: { body: string }[] = [];
+  const upstream = http.createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (c: Buffer) => chunks.push(c));
+    req.on("end", () => {
+      seen.push({ body: Buffer.concat(chunks).toString() });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+  });
+  await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", () => resolve()));
+  const upstreamPort = (upstream.address() as { port: number }).port;
+  t.after(async () => {
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+  });
+
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  writeFileSync(
+    CONFIG_PATH,
+    JSON.stringify({
+      port: 0,
+      activeProvider: "fake",
+      activeModel: "real-model",
+      providers: {
+        fake: {
+          baseUrl: `http://127.0.0.1:${upstreamPort}/v1`,
+          apiKey: "${MY_TEST_KEY}",
+          models: ["real-model"],
+          inputFilter: { image: true },
+        },
+      },
+    }),
+  );
+
+  const port = await freePort();
+  const handle = await startServer({ port });
+  t.after(async () => handle.close());
+
+  const res = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      model: "warp",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "hi" },
+            { type: "image_url", image_url: { url: "data:x" } },
+          ],
+        },
+      ],
+    }),
+  });
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { ok: true });
+
+  // 上游收到的是过滤后的 body：图片被移除，原位留说明，且 Chat 只剩文本被压成字符串。
+  assert.equal(seen.length, 1);
+  assert.doesNotMatch(seen[0].body, /image_url/);
+  const forwarded = JSON.parse(seen[0].body) as { model: string; messages: { content: unknown }[] };
+  assert.equal(forwarded.model, "real-model");
+  assert.equal(forwarded.messages[0].content, "hi\n[llmwarp: removed 1 image]");
+
+  let events = readStatsEvents();
+  for (let attempt = 0; attempt < 50 && events.length === 0; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    events = readStatsEvents();
+  }
+  assert.equal(events.length, 1);
+  assert.deepEqual(events[0].inputFilter, { image: 1, audio: 0, file: 0, video: 0 });
 });

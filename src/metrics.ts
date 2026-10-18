@@ -1,3 +1,5 @@
+import type { InputFilterCounts } from "./inputfilter.js";
+
 export interface RequestActivity {
   timestamp: string;
   method: string;
@@ -7,6 +9,8 @@ export interface RequestActivity {
   status: number | null;
   durationMs: number;
   ok: boolean;
+  /** 本次请求被输入过滤移除的媒体块数量；无过滤时省略。 */
+  inputFilter?: InputFilterCounts;
 }
 
 export interface RequestMetricsSnapshot {

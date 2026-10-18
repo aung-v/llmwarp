@@ -55,3 +55,29 @@ test("请求指标窗口只统计最近 60 秒", () => {
   assert.equal(snapshot.totalRequests, 1);
   assert.equal(snapshot.recent.length, 1);
 });
+
+test("请求指标透传输入过滤计数", () => {
+  const metrics = new RequestMetrics(() => 1_000);
+  metrics.record({
+    method: "POST",
+    path: "/v1/chat/completions",
+    provider: "ark",
+    model: "glm-5.3-flash",
+    status: 200,
+    durationMs: 100,
+    inputFilter: { image: 2, audio: 1, file: 0, video: 0 },
+  });
+  metrics.record({
+    method: "POST",
+    path: "/v1/chat/completions",
+    provider: "ark",
+    model: "glm-5.3-flash",
+    status: 200,
+    durationMs: 90,
+  });
+
+  const snapshot = metrics.snapshot();
+  // recent[0] 是最新一条（无过滤），带过滤的是上一条
+  assert.equal(snapshot.recent[0]?.inputFilter, undefined);
+  assert.deepEqual(snapshot.recent[1]?.inputFilter, { image: 2, audio: 1, file: 0, video: 0 });
+});

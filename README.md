@@ -132,6 +132,32 @@ The config lives at `~/.config/llmwarp/config.jsonc` (XDG-aware: `$XDG_CONFIG_HO
 - The config file is written `0600` and its directory `0700`. Prefer `${ENV_VAR}` over plaintext keys.
 - While the daemon runs: state in `~/.config/llmwarp/daemon.json` (holds the loopback admin token), logs in `~/.config/llmwarp/daemon.log`.
 
+### Input filter
+
+Relays often cap the request body (`413 Request Entity Too Large`) and some upstreams cannot take images or audio at all. Per target - provider, model, or model + endpoint - llmwarp can remove media parts from the body before forwarding:
+
+```jsonc
+"providers": {
+  "ark": {
+    "baseUrl": "https://ark.cn-beijing.volces.com/api/v3",
+    "apiKey": "${ARK_API_KEY}",
+    "inputFilter": { "image": true },        // every model of this provider
+    "targets": {
+      "doubao-seed-1-6": {
+        "inputFilter": { "image": false },   // this model keeps images
+        "endpoints": { "/responses": { "inputFilter": { "image": true, "file": true } } }  // …this endpoint strips them again
+      }
+    }
+  }
+}
+```
+
+- Four switches: `image` / `audio` / `file` / `video`; all default to `false`, so nothing is touched unless you opt in.
+- The most specific layer wins as a whole: endpoint > model > provider. Layers are never merged field by field.
+- Removed parts leave one note per content array in the first removed position, e.g. `[llmwarp: removed 2 images, 1 file]`. The request is still forwarded - llmwarp never rejects or answers locally.
+- Only unambiguous media parts are removed (Chat `image_url` / `input_audio` / `file`, Responses `input_image` / `input_audio` / `input_file`). Multipart uploads, `computer_call_output` screenshots and `code_interpreter_call.outputs` pass through untouched.
+- The stats JSONL row and the TUI activity panel show what was removed (`img×2 aud×1`); nothing else about the request changes.
+
 ## Development
 
 ```bash

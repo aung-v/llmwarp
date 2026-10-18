@@ -1694,3 +1694,89 @@ test("反馈面板：最长反馈 + 最大计数下帧不变量仍成立", () =>
     }
   }
 });
+
+test("parseStatusSnapshot 解析活动行 inputFilter，缺失 / 非法为 undefined", () => {
+  const base = {
+    ...status,
+    metrics: {
+      totalRequests: 1,
+      totalErrors: 0,
+      requestsLastMinute: 1,
+      errorsLastMinute: 0,
+      requestsPerMinute: 1,
+      averageDurationMs: 10,
+      recent: [
+        {
+          timestamp: "2026-09-27T12:34:56.000Z",
+          method: "POST",
+          path: "/v1/chat/completions",
+          provider: "ark",
+          model: "glm-5.3-flash",
+          status: 200,
+          durationMs: 10,
+          ok: true,
+          inputFilter: { image: 1, audio: 0, file: 0, video: 0 },
+        },
+      ],
+    },
+  };
+  assert.deepEqual(parseStatusSnapshot(base)?.metrics?.recent[0]?.inputFilter, {
+    image: 1,
+    audio: 0,
+    file: 0,
+    video: 0,
+  });
+
+  const missing = JSON.parse(JSON.stringify(base)) as typeof base;
+  delete (missing.metrics.recent[0] as Record<string, unknown>).inputFilter;
+  assert.equal(parseStatusSnapshot(missing)?.metrics?.recent[0]?.inputFilter, undefined);
+
+  const bad = JSON.parse(JSON.stringify(base)) as typeof base;
+  (bad.metrics.recent[0] as Record<string, unknown>).inputFilter = { image: "1" };
+  assert.equal(parseStatusSnapshot(bad)?.metrics?.recent[0]?.inputFilter, undefined);
+});
+
+test("请求活动行显示输入过滤摘要，全 0 / 缺省不显示", () => {
+  const recent = {
+    timestamp: "2026-09-27T12:34:56.000Z",
+    method: "POST",
+    path: "/v1/chat/completions",
+    provider: "ark",
+    model: "glm-5.3-flash",
+    status: 200,
+    durationMs: 120,
+    ok: true,
+  };
+  const filtered = createTuiState(buildCatalog(config), {
+    ...status,
+    metrics: {
+      totalRequests: 1,
+      totalErrors: 0,
+      requestsLastMinute: 1,
+      errorsLastMinute: 0,
+      requestsPerMinute: 1,
+      averageDurationMs: 120,
+      recent: [{ ...recent, inputFilter: { image: 2, audio: 1, file: 0, video: 0 } }],
+    },
+  });
+  const output = renderTui(filtered, { height: 24, width: 120 });
+  assert.match(output, /img×2 aud×1/);
+  assert.doesNotMatch(output, /fil×/);
+  assert.doesNotMatch(output, /vid×/);
+
+  const zeroed = createTuiState(buildCatalog(config), {
+    ...status,
+    metrics: {
+      totalRequests: 1,
+      totalErrors: 0,
+      requestsLastMinute: 1,
+      errorsLastMinute: 0,
+      requestsPerMinute: 1,
+      averageDurationMs: 120,
+      recent: [{ ...recent, inputFilter: { image: 0, audio: 0, file: 0, video: 0 } }],
+    },
+  });
+  const plain = renderTui(zeroed, { height: 24, width: 120 });
+  assert.match(plain, /200 120ms ark\/glm-5\.3-flash/);
+  assert.doesNotMatch(plain, /img×/);
+});

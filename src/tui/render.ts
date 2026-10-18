@@ -8,6 +8,7 @@ import {
   statsWindowData,
 } from "./model.js";
 import type { AggregateMetrics } from "../stats/aggregate.js";
+import type { InputFilterCounts } from "../inputfilter.js";
 import pc from "picocolors";
 
 const ANSI_ESCAPE = /\u001B\[[0-?]*[ -/]*[@-~]|\u001B\][^\u0007]*(?:\u0007|\u001B\\)/g;
@@ -301,6 +302,21 @@ function eventRows(event: TuiEvent, wrapWidth: number): string[] {
   );
 }
 
+/** 活动行的输入过滤摘要，如 `img×2 aud×1`；全 0 或缺失返回空串。 */
+function inputFilterSummary(inputFilter: InputFilterCounts | undefined): string {
+  if (!inputFilter) return "";
+  const labels: [keyof InputFilterCounts, string][] = [
+    ["image", "img"],
+    ["audio", "aud"],
+    ["file", "fil"],
+    ["video", "vid"],
+  ];
+  return labels
+    .filter(([key]) => inputFilter[key] > 0)
+    .map(([key, label]) => `${label}×${inputFilter[key]}`)
+    .join(" ");
+}
+
 function activityRows(state: TuiState, height: number, width: number): string[] {
   const innerWidth = Math.max(width - 4, 10);
   const wrapWidth = Math.max(innerWidth - 9, 8);
@@ -351,9 +367,10 @@ function activityRows(state: TuiState, height: number, width: number): string[] 
   const remaining = height - metricRows - sep - usedEventRows;
   const entryLimit = Math.max(Math.floor(remaining / 2), 0);
   for (const request of metrics.recent.slice(0, entryLimit)) {
+    const filterSummary = inputFilterSummary(request.inputFilter);
     rows.push(
       `${sanitize(request.method)} ${sanitize(request.path)}`,
-      `  ${shortTime(sanitize(request.timestamp))} ${request.status ?? "ERR"} ${request.durationMs}ms ${request.provider && request.model ? `${sanitize(request.provider)}/${sanitize(request.model)}` : "—"}`,
+      `  ${shortTime(sanitize(request.timestamp))} ${request.status ?? "ERR"} ${request.durationMs}ms${filterSummary ? ` ${filterSummary}` : ""} ${request.provider && request.model ? `${sanitize(request.provider)}/${sanitize(request.model)}` : "—"}`,
     );
   }
 

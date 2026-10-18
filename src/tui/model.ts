@@ -1,4 +1,5 @@
 import { isValidModelName, type Config } from "../config.js";
+import type { InputFilterCounts } from "../inputfilter.js";
 import { STATS_WINDOWS, type StatsWindow, type StatsWindowId } from "../stats/aggregate.js";
 import type {
   Aggregate,
@@ -34,6 +35,8 @@ export interface RequestActivity {
   status: number | null;
   durationMs: number;
   ok: boolean;
+  /** 本次请求被输入过滤移除的媒体块数量；缺失 / 旧载荷为 undefined。 */
+  inputFilter?: InputFilterCounts;
 }
 
 export interface RequestMetricsSnapshot {
@@ -598,6 +601,20 @@ function parseAggregate(payload: unknown): Aggregate | null {
   return { overall, days, hours, targets, unrouted, windows };
 }
 
+/** 解析活动行上的输入过滤计数；四个键都必须是 >=0 的有限数，否则视为缺失。 */
+function parseInputFilterCounts(payload: unknown): InputFilterCounts | undefined {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
+  const value = payload as Record<string, unknown>;
+  const keys = ["image", "audio", "file", "video"] as const;
+  const counts = { image: 0, audio: 0, file: 0, video: 0 };
+  for (const key of keys) {
+    const count = value[key];
+    if (typeof count !== "number" || !Number.isFinite(count) || count < 0) return undefined;
+    counts[key] = count;
+  }
+  return counts;
+}
+
 function parseMetricsSnapshot(payload: unknown): RequestMetricsSnapshot | null {
   if (!payload || typeof payload !== "object") return null;
   const value = payload as Record<string, unknown>;
@@ -629,6 +646,7 @@ function parseMetricsSnapshot(payload: unknown): RequestMetricsSnapshot | null {
       status: typeof request.status === "number" ? request.status : null,
       durationMs: request.durationMs,
       ok: request.ok,
+      inputFilter: parseInputFilterCounts(request.inputFilter),
     }];
   });
 

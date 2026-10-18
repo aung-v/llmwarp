@@ -7,6 +7,7 @@ import {
   getStatsConfig,
   resolveActive,
   resolveApiKey,
+  resolveInputFilter,
   stripVersionPrefix,
   writeDaemonInfo,
   clearDaemonInfoFor,
@@ -14,6 +15,7 @@ import {
   type Config,
 } from "./config.js";
 import { buildUpstreamUrl, proxyRequest, readRequestBody, type UpstreamObservation } from "./proxy.js";
+import { applyInputFilter, emptyCounts, totalCount, type InputFilterCounts } from "./inputfilter.js";
 import { buildModelCatalog, resolveModelRoute, RoutingError } from "./routing.js";
 import { RequestMetrics } from "./metrics.js";
 import { accessLines } from "./endpoint.js";
@@ -196,6 +198,8 @@ async function handleProxy(
   let routeKind: RouteKind = "unrouted";
   let status: number | null = null;
   let completed = false;
+  // 输入过滤计数：拿到路由后填充；即使随后连接失败，统计也能带上过滤结果。
+  let inputFilter: InputFilterCounts = emptyCounts();
   // 用 ref 容器持有观测结果：回调在闭包里赋值，容器属性访问不会被 TS 误收窄为 null。
   const observationRef: { current: UpstreamObservation | null } = { current: null };
 
@@ -231,6 +235,7 @@ async function handleProxy(
       termination = "client_aborted";
     }
 
+    const filteredTotal = totalCount(inputFilter);
     router.metrics.record({
       method: req.method ?? "GET",
       path: url.pathname,
@@ -239,6 +244,7 @@ async function handleProxy(
       status: finalStatus,
       durationMs,
       ok,
+      ...(filteredTotal > 0 ? { inputFilter } : {}),
     });
 
     const event: RequestEvent = {
@@ -258,6 +264,7 @@ async function handleProxy(
       finishReason: observation?.finishReason ?? null,
       rateLimit: observation?.rateLimit ?? null,
       termination,
+      ...(filteredTotal > 0 ? { inputFilter } : {}),
     };
     router.stats.record(event);
   };
@@ -311,6 +318,13 @@ async function handleProxy(
   providerName = route.providerName;
   model = route.model ?? null;
 
+  const filterConfig = resolveInputFilter(route.provider, route.model, url.pathname);
+  const { body: forwardBody, filtered } = applyInputFilter(body, filterConfig);
+  inputFilter = filtered;
+  if (totalCount(filtered) > 0) {
+    debugLog("input-filter", "removed media parts", { path: url.pathname, ...filtered });
+  }
+
   const upstreamUrl = buildUpstreamUrl(route.provider.baseUrl, url.pathname, url.search);
   const includeUsage =
     router.stats.isEnabled && bodyInfo.stream && isChatCompletions(url.pathname);
@@ -318,7 +332,7 @@ async function handleProxy(
     upstreamUrl,
     apiKey,
     model: route.model,
-    body,
+    body: forwardBody,
     startedAt,
     includeUsage,
     observer: (observation) => {

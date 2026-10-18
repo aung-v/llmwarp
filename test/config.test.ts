@@ -11,6 +11,10 @@ import {
   isValidModelName,
   normalizeStatsConfig,
   getStatsConfig,
+  normalizeInputFilter,
+  normalizeTargets,
+  normalizeEndpoint,
+  resolveInputFilter,
   DEFAULT_STATS_CONFIG,
   type Config,
 } from "../src/config.js";
@@ -148,4 +152,83 @@ test("getStatsConfig 在缺省时返回完整默认配置", () => {
   const resolved = getStatsConfig(config);
   resolved.enabled = false;
   assert.equal(DEFAULT_STATS_CONFIG.enabled, true);
+});
+
+test("normalizeInputFilter 校验布尔值并带字段路径报错", () => {
+  assert.equal(normalizeInputFilter(undefined, "providers.ark.inputFilter"), undefined);
+  assert.equal(normalizeInputFilter(null, "providers.ark.inputFilter"), undefined);
+  assert.equal(normalizeInputFilter({}, "providers.ark.inputFilter"), undefined);
+  assert.deepEqual(normalizeInputFilter({ image: true, file: false }, "providers.ark.inputFilter"), {
+    image: true,
+    file: false,
+  });
+  // 未知键忽略
+  assert.deepEqual(normalizeInputFilter({ image: true, other: 1 }, "p"), { image: true });
+  // 非布尔按字段路径报错
+  assert.throws(
+    () => normalizeInputFilter({ image: "yes" }, "providers.ark.inputFilter"),
+    /providers\.ark\.inputFilter\.image/,
+  );
+  assert.throws(
+    () => normalizeInputFilter([true], "providers.ark.inputFilter"),
+    /providers\.ark\.inputFilter/,
+  );
+});
+
+test("normalizeTargets 解析模型 / endpoint 两层并带路径报错", () => {
+  const targets = normalizeTargets(
+    {
+      doubao: {
+        inputFilter: { audio: true },
+        endpoints: { "/responses": { inputFilter: { image: false } } },
+      },
+    },
+    "providers.ark.targets",
+  );
+  assert.deepEqual(targets, {
+    doubao: { inputFilter: { audio: true }, endpoints: { "/responses": { inputFilter: { image: false } } } },
+  });
+  assert.throws(
+    () =>
+      normalizeTargets(
+        { doubao: { endpoints: { "/responses": { inputFilter: { image: "no" } } } } },
+        "providers.ark.targets",
+      ),
+    /providers\.ark\.targets\.doubao\.endpoints\.\/responses\.inputFilter\.image/,
+  );
+  assert.throws(() => normalizeTargets([], "providers.ark.targets"), /providers\.ark\.targets/);
+});
+
+test("normalizeEndpoint 去掉 /v1 前缀与尾部斜杠", () => {
+  assert.equal(normalizeEndpoint("/v1/responses"), "/responses");
+  assert.equal(normalizeEndpoint("/v1/chat/completions"), "/chat/completions");
+  assert.equal(normalizeEndpoint("/v1/responses/"), "/responses");
+  assert.equal(normalizeEndpoint("/v1"), "/");
+  assert.equal(normalizeEndpoint("/responses"), "/responses");
+});
+
+test("resolveInputFilter 按 endpoint > model > provider 覆盖", () => {
+  const provider = {
+    baseUrl: "http://x/v1",
+    apiKey: "k",
+    models: ["doubao", "glm"],
+    inputFilter: { image: true },
+    targets: {
+      doubao: {
+        inputFilter: { audio: true },
+        endpoints: { "/responses": { inputFilter: { image: false } } },
+      },
+    },
+  };
+  // 未命中任何 target：provider 层
+  assert.deepEqual(resolveInputFilter(provider, "glm", "/v1/chat/completions"), { image: true });
+  // 命中模型层
+  assert.deepEqual(resolveInputFilter(provider, "doubao", "/v1/chat/completions"), { audio: true });
+  // 命中 endpoint 层（配置键与请求路径都可带 /v1）
+  assert.deepEqual(resolveInputFilter(provider, "doubao", "/v1/responses"), { image: false });
+  assert.deepEqual(resolveInputFilter(provider, "doubao", "/responses"), { image: false });
+  // 没有 model 时回落到 provider 层
+  assert.deepEqual(resolveInputFilter(provider, undefined, "/v1/responses"), { image: true });
+  // 完全没有配置时 undefined（等于全部不过滤）
+  assert.equal(resolveInputFilter({ baseUrl: "http://x/v1", apiKey: "k" }, "m", "/v1/responses"), undefined);
 });

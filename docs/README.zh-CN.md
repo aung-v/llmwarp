@@ -132,6 +132,32 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 - 配置文件写入权限 `0600`，所在目录 `0700`。密钥建议用 `${ENV_VAR}` 而非明文。
 - 守护进程运行时：状态在 `~/.config/llmwarp/daemon.json`（含本机管理接口 token），日志在 `~/.config/llmwarp/daemon.log`。
 
+### 输入过滤
+
+中转 / CDN 常限制请求体大小（`413 Request Entity Too Large`），有些上游也根本不接受图片或音频。llmwarp 可以按 target（供应商 / 模型 / 模型 + 端点）在转发前把媒体块从请求体里删掉：
+
+```jsonc
+"providers": {
+  "ark": {
+    "baseUrl": "https://ark.cn-beijing.volces.com/api/v3",
+    "apiKey": "${ARK_API_KEY}",
+    "inputFilter": { "image": true },        // 该供应商所有模型
+    "targets": {
+      "doubao-seed-1-6": {
+        "inputFilter": { "image": false },   // 该模型保留图片
+        "endpoints": { "/responses": { "inputFilter": { "image": true, "file": true } } }  // 该端点又删掉
+      }
+    }
+  }
+}
+```
+
+- 四个开关 `image` / `audio` / `file` / `video`，默认全是 `false`，不配置就不做任何改动。
+- 层级整体覆盖，不逐字段合并：endpoint > model > provider。
+- 删除的块会在该 content 数组内首个被删位置留一句说明，如 `[llmwarp: removed 2 images, 1 file]`；请求照常转发，llmwarp 不拦截、不本地报错。
+- 只删能确定的媒体块（Chat 的 `image_url` / `input_audio` / `file`，Responses 的 `input_image` / `input_audio` / `input_file`）；multipart 上传、`computer_call_output` 截图、`code_interpreter_call.outputs` 一律原样透传。
+- 统计 JSONL 与 TUI 活动面板会显示删了什么（`img×2 aud×1`），请求的其他部分不变。
+
 ## 开发
 
 ```bash

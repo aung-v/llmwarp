@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "质量门与测试习惯"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "配置错误是否按约定暴露"}
+{"file": ".trellis/spec/backend/usage-stats.md", "reason": "统计字段与测试清单是否同步"}
+{"file": ".trellis/spec/frontend/interaction-guidelines.md", "reason": "TUI 变更是否符合交互约定"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层数据流是否闭环"}

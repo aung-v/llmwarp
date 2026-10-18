@@ -5,6 +5,7 @@
  * 上游响应千奇百怪，采集失败只能降级为「无 token」，不能影响转发。
  */
 import { WARP_MODEL_ID } from "../routing.js";
+import type { InputFilterCounts } from "../inputfilter.js";
 
 /** 解析后的路由归属：warp 别名 / 客户端显式指定 / 兜底 / 被开关覆盖 / 路由失败。 */
 export type RouteKind = "warp" | "explicit" | "fallback" | "overridden" | "unrouted";
@@ -43,6 +44,8 @@ export interface RequestEvent {
   finishReason: string | null;
   rateLimit: RateLimitInfo | null;
   termination?: Termination | null;
+  /** 本次请求被输入过滤移除的媒体块数量；全 0 / 旧行省略。 */
+  inputFilter?: InputFilterCounts;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

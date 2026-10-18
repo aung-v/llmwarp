@@ -9,10 +9,31 @@ import {
   type ParseError,
 } from "jsonc-parser";
 
+/**
+ * 按 target 配置的输入过滤开关：打开后代理会在转发前移除对应类型的媒体块。
+ * 四个键都可选，缺省视为 false。值必须是布尔，否则加载时按字段路径报错。
+ */
+export interface InputFilterConfig {
+  image?: boolean;
+  audio?: boolean;
+  file?: boolean;
+  video?: boolean;
+}
+
+/** 模型层（`targets[model]`）配置：模型级开关 + 更细的 endpoint 级开关。 */
+export interface TargetConfig {
+  inputFilter?: InputFilterConfig;
+  endpoints?: Record<string, { inputFilter?: InputFilterConfig }>;
+}
+
 export interface Provider {
   baseUrl: string;
   apiKey: string;
   models?: string[];
+  /** provider 级输入过滤；被更具体的 model / endpoint 层覆盖。 */
+  inputFilter?: InputFilterConfig;
+  /** 按模型名（以及模型内的 endpoint）细分的输入过滤。 */
+  targets?: Record<string, TargetConfig>;
 }
 
 export interface StatsConfig {
@@ -165,6 +186,8 @@ function normalizeConfig(raw: unknown): Config {
           baseUrl: typeof p.baseUrl === "string" ? p.baseUrl : "",
           apiKey: typeof p.apiKey === "string" ? p.apiKey : "",
           models: Array.isArray(p.models) ? p.models.filter((m): m is string => typeof m === "string") : undefined,
+          inputFilter: normalizeInputFilter(p.inputFilter, `providers.${name}.inputFilter`),
+          targets: normalizeTargets(p.targets, `providers.${name}.targets`),
         };
       }
     }
@@ -192,6 +215,83 @@ export function normalizeStatsConfig(raw: unknown): StatsConfig {
     enabled: typeof obj.enabled === "boolean" ? obj.enabled : DEFAULT_STATS_CONFIG.enabled,
     retentionDays: retention,
   };
+}
+
+/** 输入过滤的四个已知开关，顺序即过滤说明与 TUI 摘要的展示顺序。 */
+export const INPUT_FILTER_KEYS = ["image", "audio", "file", "video"] as const;
+export type InputFilterKey = (typeof INPUT_FILTER_KEYS)[number];
+
+/**
+ * 归一化单个 inputFilter 对象：四个已知键存在时必须是布尔，否则抛错并带上字段路径。
+ * 空对象或全部缺省返回 undefined，表示「该层未配置」，交给更上层回落。
+ */
+export function normalizeInputFilter(raw: unknown, path: string): InputFilterConfig | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(`配置项 ${path} 必须是对象`);
+  }
+  const source = raw as Record<string, unknown>;
+  const filter: InputFilterConfig = {};
+  let defined = false;
+  for (const key of INPUT_FILTER_KEYS) {
+    const value = source[key];
+    if (value === undefined) continue;
+    if (typeof value !== "boolean") {
+      throw new Error(`配置项 ${path}.${key} 必须是布尔值`);
+    }
+    filter[key] = value;
+    defined = true;
+  }
+  return defined ? filter : undefined;
+}
+
+function normalizeEndpoints(
+  raw: unknown,
+  path: string,
+): Record<string, { inputFilter?: InputFilterConfig }> | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(`配置项 ${path} 必须是对象`);
+  }
+  const endpoints: Record<string, { inputFilter?: InputFilterConfig }> = {};
+  for (const [endpoint, value] of Object.entries(raw as Record<string, unknown>)) {
+    const base = `${path}.${endpoint}`;
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error(`配置项 ${base} 必须是对象`);
+    }
+    const inputFilter = normalizeInputFilter(
+      (value as Record<string, unknown>).inputFilter,
+      `${base}.inputFilter`,
+    );
+    endpoints[endpoint] = inputFilter ? { inputFilter } : {};
+  }
+  return Object.keys(endpoints).length > 0 ? endpoints : undefined;
+}
+
+/**
+ * 归一化 provider.targets：按模型名分组的模型级 / endpoint 级 inputFilter。
+ * 未识别的模型名、endpoint 键也照常解析（模型列表可能变化），解析时匹配不到就不生效。
+ */
+export function normalizeTargets(raw: unknown, path: string): Record<string, TargetConfig> | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(`配置项 ${path} 必须是对象`);
+  }
+  const targets: Record<string, TargetConfig> = {};
+  for (const [model, value] of Object.entries(raw as Record<string, unknown>)) {
+    const base = `${path}.${model}`;
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error(`配置项 ${base} 必须是对象`);
+    }
+    const source = value as Record<string, unknown>;
+    const target: TargetConfig = {};
+    const inputFilter = normalizeInputFilter(source.inputFilter, `${base}.inputFilter`);
+    if (inputFilter) target.inputFilter = inputFilter;
+    const endpoints = normalizeEndpoints(source.endpoints, `${base}.endpoints`);
+    if (endpoints) target.endpoints = endpoints;
+    targets[model] = target;
+  }
+  return Object.keys(targets).length > 0 ? targets : undefined;
 }
 
 export function validateConfig(config: Config): void {
@@ -258,6 +358,40 @@ export function resolveActive(
         ? provider.models[0]
         : undefined;
   return { providerName, provider, model };
+}
+
+/**
+ * endpoint 归一化：去掉首个 `/v1` 版本前缀与尾部 `/`，作为 `targets[].endpoints` 的匹配键。
+ * 结果为空（如 `/v1`、`/v1/`）时统一成 `/`。
+ */
+export function normalizeEndpoint(pathname: string): string {
+  const stripped = stripVersionPrefix(pathname).replace(/\/+$/, "");
+  return stripped.length > 0 ? stripped : "/";
+}
+
+/**
+ * 解析某个 target（provider + model + endpoint）生效的输入过滤开关。
+ * 优先级：endpoint > model > provider > 缺省（undefined，即全部不过滤）；
+ * 命中哪一层就整层采用，不做字段级合并。endpoint 键按 `normalizeEndpoint` 比较。
+ */
+export function resolveInputFilter(
+  provider: Provider,
+  model: string | undefined,
+  endpoint: string,
+): InputFilterConfig | undefined {
+  if (model) {
+    const target = provider.targets?.[model];
+    if (target) {
+      if (target.endpoints) {
+        const normalized = normalizeEndpoint(endpoint);
+        for (const [key, value] of Object.entries(target.endpoints)) {
+          if (normalizeEndpoint(key) === normalized && value.inputFilter) return value.inputFilter;
+        }
+      }
+      if (target.inputFilter) return target.inputFilter;
+    }
+  }
+  return provider.inputFilter;
 }
 
 /** 把 ${ENV_VAR} 替换为环境变量值；未定义则抛错。 */
