@@ -1,4 +1,5 @@
 import type { InputFilterCounts } from "./inputfilter.js";
+import type { ReasoningInfo } from "./reasoning.js";
 
 export interface RequestActivity {
   timestamp: string;
@@ -11,6 +12,8 @@ export interface RequestActivity {
   ok: boolean;
   /** 本次请求被输入过滤移除的媒体块数量；无过滤时省略。 */
   inputFilter?: InputFilterCounts;
+  /** 思考强度：客户端请求值与实际转发值；未改写时省略。 */
+  reasoning?: ReasoningInfo;
 }
 
 export interface RequestMetricsSnapshot {

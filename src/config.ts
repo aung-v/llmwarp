@@ -20,10 +20,33 @@ export interface InputFilterConfig {
   video?: boolean;
 }
 
-/** 模型层（`targets[model]`）配置：模型级开关 + 更细的 endpoint 级开关。 */
-export interface TargetConfig {
+/**
+ * 思考强度设置：`passthrough` 原样不动；`off` 写 `none`；其余是直接写进请求的等级。
+ * 顺序即文档与报错里的枚举顺序。
+ */
+export const REASONING_SETTINGS = [
+  "passthrough",
+  "off",
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+] as const;
+export type ReasoningSetting = (typeof REASONING_SETTINGS)[number];
+
+export interface EndpointConfig {
   inputFilter?: InputFilterConfig;
-  endpoints?: Record<string, { inputFilter?: InputFilterConfig }>;
+  /** 思考强度设置；缺省表示该层未配置，交给更上层回落。 */
+  reasoning?: ReasoningSetting;
+}
+
+/** 模型层（`targets[model]`）配置：模型级设置 + 更细的 endpoint 级设置。 */
+export interface TargetConfig extends EndpointConfig {
+  endpoints?: Record<string, EndpointConfig>;
 }
 
 export interface Provider {
@@ -32,7 +55,9 @@ export interface Provider {
   models?: string[];
   /** provider 级输入过滤；被更具体的 model / endpoint 层覆盖。 */
   inputFilter?: InputFilterConfig;
-  /** 按模型名（以及模型内的 endpoint）细分的输入过滤。 */
+  /** provider 级思考强度；被更具体的 model / endpoint 层覆盖。 */
+  reasoning?: ReasoningSetting;
+  /** 按模型名（以及模型内的 endpoint）细分的输入过滤与思考强度。 */
   targets?: Record<string, TargetConfig>;
 }
 
@@ -187,6 +212,7 @@ function normalizeConfig(raw: unknown): Config {
           apiKey: typeof p.apiKey === "string" ? p.apiKey : "",
           models: Array.isArray(p.models) ? p.models.filter((m): m is string => typeof m === "string") : undefined,
           inputFilter: normalizeInputFilter(p.inputFilter, `providers.${name}.inputFilter`),
+          reasoning: normalizeReasoning(p.reasoning, `providers.${name}.reasoning`),
           targets: normalizeTargets(p.targets, `providers.${name}.targets`),
         };
       }
@@ -245,15 +271,30 @@ export function normalizeInputFilter(raw: unknown, path: string): InputFilterCon
   return defined ? filter : undefined;
 }
 
+/**
+ * 归一化单个 reasoning 设置：必须是固定集合之一，否则抛错并带上字段路径。
+ * 缺省返回 undefined，表示「该层未配置」，交给上层回落（最终默认 `passthrough`）。
+ */
+export function normalizeReasoning(raw: unknown, path: string): ReasoningSetting | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "string") {
+    throw new Error(`配置项 ${path} 必须是字符串`);
+  }
+  if (!(REASONING_SETTINGS as readonly string[]).includes(raw)) {
+    throw new Error(`配置项 ${path} 必须是以下之一：${REASONING_SETTINGS.join(" / ")}`);
+  }
+  return raw as ReasoningSetting;
+}
+
 function normalizeEndpoints(
   raw: unknown,
   path: string,
-): Record<string, { inputFilter?: InputFilterConfig }> | undefined {
+): Record<string, EndpointConfig> | undefined {
   if (raw === undefined || raw === null) return undefined;
   if (typeof raw !== "object" || Array.isArray(raw)) {
     throw new Error(`配置项 ${path} 必须是对象`);
   }
-  const endpoints: Record<string, { inputFilter?: InputFilterConfig }> = {};
+  const endpoints: Record<string, EndpointConfig> = {};
   for (const [endpoint, value] of Object.entries(raw as Record<string, unknown>)) {
     const base = `${path}.${endpoint}`;
     if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -263,13 +304,20 @@ function normalizeEndpoints(
       (value as Record<string, unknown>).inputFilter,
       `${base}.inputFilter`,
     );
-    endpoints[endpoint] = inputFilter ? { inputFilter } : {};
+    const reasoning = normalizeReasoning(
+      (value as Record<string, unknown>).reasoning,
+      `${base}.reasoning`,
+    );
+    const entry: EndpointConfig = {};
+    if (inputFilter) entry.inputFilter = inputFilter;
+    if (reasoning) entry.reasoning = reasoning;
+    endpoints[endpoint] = entry;
   }
   return Object.keys(endpoints).length > 0 ? endpoints : undefined;
 }
 
 /**
- * 归一化 provider.targets：按模型名分组的模型级 / endpoint 级 inputFilter。
+ * 归一化 provider.targets：按模型名分组的模型级 / endpoint 级 inputFilter 与 reasoning。
  * 未识别的模型名、endpoint 键也照常解析（模型列表可能变化），解析时匹配不到就不生效。
  */
 export function normalizeTargets(raw: unknown, path: string): Record<string, TargetConfig> | undefined {
@@ -287,6 +335,8 @@ export function normalizeTargets(raw: unknown, path: string): Record<string, Tar
     const target: TargetConfig = {};
     const inputFilter = normalizeInputFilter(source.inputFilter, `${base}.inputFilter`);
     if (inputFilter) target.inputFilter = inputFilter;
+    const reasoning = normalizeReasoning(source.reasoning, `${base}.reasoning`);
+    if (reasoning) target.reasoning = reasoning;
     const endpoints = normalizeEndpoints(source.endpoints, `${base}.endpoints`);
     if (endpoints) target.endpoints = endpoints;
     targets[model] = target;
@@ -370,28 +420,60 @@ export function normalizeEndpoint(pathname: string): string {
 }
 
 /**
- * 解析某个 target（provider + model + endpoint）生效的输入过滤开关。
- * 优先级：endpoint > model > provider > 缺省（undefined，即全部不过滤）；
- * 命中哪一层就整层采用，不做字段级合并。endpoint 键按 `normalizeEndpoint` 比较。
+ * 某个 target（provider + model + endpoint）可选的配置层，按具体程度从高到低排列。
+ * 只有 endpoint 键按 `normalizeEndpoint` 命中时才出现在最前面。
  */
-export function resolveInputFilter(
+function targetLayers(
   provider: Provider,
   model: string | undefined,
   endpoint: string,
-): InputFilterConfig | undefined {
+): EndpointConfig[] {
+  const layers: EndpointConfig[] = [];
   if (model) {
     const target = provider.targets?.[model];
     if (target) {
       if (target.endpoints) {
         const normalized = normalizeEndpoint(endpoint);
         for (const [key, value] of Object.entries(target.endpoints)) {
-          if (normalizeEndpoint(key) === normalized && value.inputFilter) return value.inputFilter;
+          if (normalizeEndpoint(key) === normalized) layers.push(value);
         }
       }
-      if (target.inputFilter) return target.inputFilter;
+      layers.push(target);
     }
   }
-  return provider.inputFilter;
+  layers.push(provider);
+  return layers;
+}
+
+/**
+ * 解析某个 target（provider + model + endpoint）生效的输入过滤开关。
+ * 优先级：endpoint > model > provider > 缺省（undefined，即全部不过滤）；
+ * 谁先定义 `inputFilter` 就用谁整份配置，不做字段级合并。
+ */
+export function resolveInputFilter(
+  provider: Provider,
+  model: string | undefined,
+  endpoint: string,
+): InputFilterConfig | undefined {
+  for (const layer of targetLayers(provider, model, endpoint)) {
+    if (layer.inputFilter) return layer.inputFilter;
+  }
+  return undefined;
+}
+
+/**
+ * 解析某个 target 生效的思考强度设置；三层都没配置时默认 `passthrough`（不修改）。
+ * 覆盖规则同 `resolveInputFilter`：谁先定义 `reasoning` 就用谁的值。
+ */
+export function resolveReasoning(
+  provider: Provider,
+  model: string | undefined,
+  endpoint: string,
+): ReasoningSetting {
+  for (const layer of targetLayers(provider, model, endpoint)) {
+    if (layer.reasoning) return layer.reasoning;
+  }
+  return "passthrough";
 }
 
 /** 把 ${ENV_VAR} 替换为环境变量值；未定义则抛错。 */

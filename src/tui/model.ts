@@ -1,5 +1,6 @@
 import { isValidModelName, type Config } from "../config.js";
 import type { InputFilterCounts } from "../inputfilter.js";
+import type { ReasoningInfo } from "../reasoning.js";
 import { STATS_WINDOWS, type StatsWindow, type StatsWindowId } from "../stats/aggregate.js";
 import type {
   Aggregate,
@@ -37,6 +38,8 @@ export interface RequestActivity {
   ok: boolean;
   /** 本次请求被输入过滤移除的媒体块数量；缺失 / 旧载荷为 undefined。 */
   inputFilter?: InputFilterCounts;
+  /** 思考强度改写结果；缺失 / 旧载荷为 undefined。 */
+  reasoning?: ReasoningInfo;
 }
 
 export interface RequestMetricsSnapshot {
@@ -615,6 +618,16 @@ function parseInputFilterCounts(payload: unknown): InputFilterCounts | undefined
   return counts;
 }
 
+/** 解析活动行上的思考强度结果；两个值都缺或都不是字符串时视为缺失。 */
+function parseReasoningInfo(payload: unknown): ReasoningInfo | undefined {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
+  const value = payload as Record<string, unknown>;
+  const requested = typeof value.requested === "string" ? value.requested : null;
+  const applied = typeof value.applied === "string" ? value.applied : null;
+  if (requested === null && applied === null) return undefined;
+  return { requested, applied };
+}
+
 function parseMetricsSnapshot(payload: unknown): RequestMetricsSnapshot | null {
   if (!payload || typeof payload !== "object") return null;
   const value = payload as Record<string, unknown>;
@@ -647,6 +660,7 @@ function parseMetricsSnapshot(payload: unknown): RequestMetricsSnapshot | null {
       durationMs: request.durationMs,
       ok: request.ok,
       inputFilter: parseInputFilterCounts(request.inputFilter),
+      reasoning: parseReasoningInfo(request.reasoning),
     }];
   });
 

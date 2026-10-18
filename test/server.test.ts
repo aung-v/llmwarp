@@ -32,6 +32,7 @@ interface PersistedEvent {
   usage: { input: number; output: number; total: number } | null;
   finishReason: string | null;
   inputFilter?: { image: number; audio: number; file: number; video: number };
+  reasoning?: { requested: string | null; applied: string | null };
 }
 
 /** 直接读落盘 JSONL：聚合快照不暴露 termination / ttftMs 的逐条取值。 */
@@ -780,4 +781,144 @@ test("代理：按 target 过滤媒体输入并写入统计", { skip: socketSkip
   }
   assert.equal(events.length, 1);
   assert.deepEqual(events[0].inputFilter, { image: 1, audio: 0, file: 0, video: 0 });
+});
+
+test("代理：按 target 改写思考强度并写入统计", { skip: socketSkip }, async (t) => {
+  resetStatsDir();
+  const seen: { body: string }[] = [];
+  const upstream = http.createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (c: Buffer) => chunks.push(c));
+    req.on("end", () => {
+      seen.push({ body: Buffer.concat(chunks).toString() });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+  });
+  await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", () => resolve()));
+  const upstreamPort = (upstream.address() as { port: number }).port;
+  t.after(async () => {
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+  });
+
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  writeFileSync(
+    CONFIG_PATH,
+    JSON.stringify({
+      port: 0,
+      activeProvider: "fake",
+      activeModel: "real-model",
+      providers: {
+        fake: {
+          baseUrl: `http://127.0.0.1:${upstreamPort}/v1`,
+          apiKey: "${MY_TEST_KEY}",
+          models: ["real-model"],
+          reasoning: "low",
+          targets: { "real-model": { endpoints: { "/responses": { reasoning: "high" } } } },
+        },
+      },
+    }),
+  );
+
+  const port = await freePort();
+  const handle = await startServer({ port });
+  t.after(async () => handle.close());
+
+  const res = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      model: "warp",
+      input: "hi",
+      reasoning: { effort: "medium", summary: "auto" },
+      reasoning_effort: "minimal",
+    }),
+  });
+  assert.equal(res.status, 200);
+
+  // 上游收到 endpoint 层的 high：reasoning.effort 被覆盖，顶层等价字段被删掉。
+  assert.equal(seen.length, 1);
+  const forwarded = JSON.parse(seen[0].body) as {
+    model: string;
+    reasoning: { effort?: string; summary?: string };
+    reasoning_effort?: string;
+  };
+  assert.equal(forwarded.model, "real-model");
+  assert.equal(forwarded.reasoning.effort, "high");
+  assert.equal(forwarded.reasoning.summary, "auto");
+  assert.equal(forwarded.reasoning_effort, undefined);
+
+  let events = readStatsEvents();
+  for (let attempt = 0; attempt < 50 && events.length === 0; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    events = readStatsEvents();
+  }
+  assert.equal(events.length, 1);
+  assert.deepEqual(events[0].reasoning, { requested: "medium", applied: "high" });
+});
+
+test("代理：默认不修改思考强度，原样透传且统计不带字段", { skip: socketSkip }, async (t) => {
+  resetStatsDir();
+  const seen: { body: string }[] = [];
+  const upstream = http.createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (c: Buffer) => chunks.push(c));
+    req.on("end", () => {
+      seen.push({ body: Buffer.concat(chunks).toString() });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+  });
+  await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", () => resolve()));
+  const upstreamPort = (upstream.address() as { port: number }).port;
+  t.after(async () => {
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+  });
+
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  writeFileSync(
+    CONFIG_PATH,
+    JSON.stringify({
+      port: 0,
+      activeProvider: "fake",
+      activeModel: "real-model",
+      providers: {
+        fake: {
+          baseUrl: `http://127.0.0.1:${upstreamPort}/v1`,
+          apiKey: "${MY_TEST_KEY}",
+          models: ["real-model"],
+        },
+      },
+    }),
+  );
+
+  const port = await freePort();
+  const handle = await startServer({ port });
+  t.after(async () => handle.close());
+
+  const payload = {
+    model: "warp",
+    messages: [{ role: "user", content: "hi" }],
+    reasoning: { effort: "medium" },
+    reasoning_effort: "low",
+  };
+  const res = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  assert.equal(res.status, 200);
+
+  // 不修改 = 一个字节都不动，两个等价字段都留着（没有增删、没有 key 重排）。
+  assert.equal(seen.length, 1);
+  const forwarded = JSON.parse(seen[0].body) as Record<string, unknown>;
+  assert.deepEqual(forwarded, { ...payload, model: "real-model" });
+
+  let events = readStatsEvents();
+  for (let attempt = 0; attempt < 50 && events.length === 0; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    events = readStatsEvents();
+  }
+  assert.equal(events.length, 1);
+  assert.equal(events[0].reasoning, undefined);
 });

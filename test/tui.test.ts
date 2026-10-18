@@ -1780,3 +1780,86 @@ test("请求活动行显示输入过滤摘要，全 0 / 缺省不显示", () => 
   assert.match(plain, /200 120ms ark\/glm-5\.3-flash/);
   assert.doesNotMatch(plain, /img×/);
 });
+
+test("parseStatusSnapshot 解析活动行 reasoning，缺失 / 非法为 undefined", () => {
+  const base = {
+    ...status,
+    metrics: {
+      totalRequests: 1,
+      totalErrors: 0,
+      requestsLastMinute: 1,
+      errorsLastMinute: 0,
+      requestsPerMinute: 1,
+      averageDurationMs: 10,
+      recent: [
+        {
+          timestamp: "2026-09-27T12:34:56.000Z",
+          method: "POST",
+          path: "/v1/chat/completions",
+          provider: "ark",
+          model: "glm-5.3-flash",
+          status: 200,
+          durationMs: 10,
+          ok: true,
+          reasoning: { requested: "medium", applied: "high" },
+        },
+      ],
+    },
+  };
+  assert.deepEqual(parseStatusSnapshot(base)?.metrics?.recent[0]?.reasoning, {
+    requested: "medium",
+    applied: "high",
+  });
+
+  const missing = JSON.parse(JSON.stringify(base)) as typeof base;
+  delete (missing.metrics.recent[0] as Record<string, unknown>).reasoning;
+  assert.equal(parseStatusSnapshot(missing)?.metrics?.recent[0]?.reasoning, undefined);
+
+  const empty = JSON.parse(JSON.stringify(base)) as typeof base;
+  (empty.metrics.recent[0] as Record<string, unknown>).reasoning = { requested: null, applied: null };
+  assert.equal(parseStatusSnapshot(empty)?.metrics?.recent[0]?.reasoning, undefined);
+
+  const bad = JSON.parse(JSON.stringify(base)) as typeof base;
+  (bad.metrics.recent[0] as Record<string, unknown>).reasoning = { applied: 3 };
+  assert.equal(parseStatusSnapshot(bad)?.metrics?.recent[0]?.reasoning, undefined);
+});
+
+test("请求活动行显示思考强度摘要，未改写不显示", () => {
+  const recent = {
+    timestamp: "2026-09-27T12:34:56.000Z",
+    method: "POST",
+    path: "/v1/chat/completions",
+    provider: "ark",
+    model: "glm-5.3-flash",
+    status: 200,
+    durationMs: 120,
+    ok: true,
+  };
+  const snapshot = (entry: Record<string, unknown>) => ({
+    ...status,
+    metrics: {
+      totalRequests: 1,
+      totalErrors: 0,
+      requestsLastMinute: 1,
+      errorsLastMinute: 0,
+      requestsPerMinute: 1,
+      averageDurationMs: 120,
+      recent: [{ ...recent, ...entry }],
+    },
+  });
+
+  const overridden = renderTui(
+    createTuiState(buildCatalog(config), snapshot({ reasoning: { requested: "medium", applied: "high" } })),
+    { height: 24, width: 120 },
+  );
+  assert.match(overridden, /rsn medium→high/);
+
+  const injected = renderTui(
+    createTuiState(buildCatalog(config), snapshot({ reasoning: { requested: null, applied: "none" } })),
+    { height: 24, width: 120 },
+  );
+  assert.match(injected, /rsn —→none/);
+
+  const plain = renderTui(createTuiState(buildCatalog(config), snapshot({})), { height: 24, width: 120 });
+  assert.doesNotMatch(plain, /rsn /);
+});

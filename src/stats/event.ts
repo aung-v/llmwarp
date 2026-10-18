@@ -6,6 +6,7 @@
  */
 import { WARP_MODEL_ID } from "../routing.js";
 import type { InputFilterCounts } from "../inputfilter.js";
+import type { ReasoningInfo } from "../reasoning.js";
 
 /** 解析后的路由归属：warp 别名 / 客户端显式指定 / 兜底 / 被开关覆盖 / 路由失败。 */
 export type RouteKind = "warp" | "explicit" | "fallback" | "overridden" | "unrouted";
@@ -46,6 +47,8 @@ export interface RequestEvent {
   termination?: Termination | null;
   /** 本次请求被输入过滤移除的媒体块数量；全 0 / 旧行省略。 */
   inputFilter?: InputFilterCounts;
+  /** 思考强度：客户端请求值与实际转发值；不修改 / 未解析时省略。 */
+  reasoning?: ReasoningInfo;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

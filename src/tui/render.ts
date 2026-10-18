@@ -9,6 +9,7 @@ import {
 } from "./model.js";
 import type { AggregateMetrics } from "../stats/aggregate.js";
 import type { InputFilterCounts } from "../inputfilter.js";
+import type { ReasoningInfo } from "../reasoning.js";
 import pc from "picocolors";
 
 const ANSI_ESCAPE = /\u001B\[[0-?]*[ -/]*[@-~]|\u001B\][^\u0007]*(?:\u0007|\u001B\\)/g;
@@ -317,6 +318,13 @@ function inputFilterSummary(inputFilter: InputFilterCounts | undefined): string 
     .join(" ");
 }
 
+/** 活动行的思考强度摘要，如 `rsn medium→high`；都没值时返回空串。 */
+function reasoningSummary(reasoning: ReasoningInfo | undefined): string {
+  if (!reasoning) return "";
+  if (reasoning.applied) return `rsn ${reasoning.requested ?? "—"}→${reasoning.applied}`;
+  return reasoning.requested ? `rsn ${reasoning.requested}` : "";
+}
+
 function activityRows(state: TuiState, height: number, width: number): string[] {
   const innerWidth = Math.max(width - 4, 10);
   const wrapWidth = Math.max(innerWidth - 9, 8);
@@ -368,9 +376,10 @@ function activityRows(state: TuiState, height: number, width: number): string[] 
   const entryLimit = Math.max(Math.floor(remaining / 2), 0);
   for (const request of metrics.recent.slice(0, entryLimit)) {
     const filterSummary = inputFilterSummary(request.inputFilter);
+    const reasonSummary = reasoningSummary(request.reasoning);
     rows.push(
       `${sanitize(request.method)} ${sanitize(request.path)}`,
-      `  ${shortTime(sanitize(request.timestamp))} ${request.status ?? "ERR"} ${request.durationMs}ms${filterSummary ? ` ${filterSummary}` : ""} ${request.provider && request.model ? `${sanitize(request.provider)}/${sanitize(request.model)}` : "—"}`,
+      `  ${shortTime(sanitize(request.timestamp))} ${request.status ?? "ERR"} ${request.durationMs}ms${filterSummary ? ` ${filterSummary}` : ""}${reasonSummary ? ` ${reasonSummary}` : ""} ${request.provider && request.model ? `${sanitize(request.provider)}/${sanitize(request.model)}` : "—"}`,
     );
   }
 

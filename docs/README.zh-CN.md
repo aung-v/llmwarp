@@ -158,6 +158,32 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 - 只删能确定的媒体块（Chat 的 `image_url` / `input_audio` / `file`，Responses 的 `input_image` / `input_audio` / `input_file`）；multipart 上传、`computer_call_output` 截图、`code_interpreter_call.outputs` 一律原样透传。
 - 统计 JSONL 与 TUI 活动面板会显示删了什么（`img×2 aud×1`），请求的其他部分不变。
 
+### 思考强度
+
+有些上游要求显式指定思考等级，有些则会拒绝或忽略客户端传的值。llmwarp 用与输入过滤相同的三层配置，在转发前把它改掉：
+
+```jsonc
+"providers": {
+  "ark": {
+    "baseUrl": "https://ark.cn-beijing.volces.com/api/v3",
+    "apiKey": "${ARK_API_KEY}",
+    "reasoning": "passthrough",              // 默认：请求原样不动
+    "targets": {
+      "doubao-seed-1-6": {
+        "reasoning": "high",                 // 该模型一律 high
+        "endpoints": { "/responses": { "reasoning": "off" } }  // 该端点关掉思考
+      }
+    }
+  }
+}
+```
+
+- 取值：`passthrough`（默认，body 连解析都不做）、`off`（写 `none`），或 `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` / `ultra` 之一。
+- 层级与输入过滤一致：endpoint > model > provider，谁先定义 `reasoning` 就整份用谁的值。
+- `/chat/completions` 写顶层 `reasoning_effort`；`/responses` 写 `reasoning.effort`；写入时会删掉另一个等价字段，避免一次请求带两个冲突的值。其他路径不改。
+- llmwarp 不探测上游支持什么，也不兜底换值：上游报错原样透出。
+- TUI 活动行会显示改写结果，如 `rsn medium→high`。
+
 ## 开发
 
 ```bash

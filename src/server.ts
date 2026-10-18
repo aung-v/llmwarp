@@ -8,6 +8,7 @@ import {
   resolveActive,
   resolveApiKey,
   resolveInputFilter,
+  resolveReasoning,
   stripVersionPrefix,
   writeDaemonInfo,
   clearDaemonInfoFor,
@@ -16,6 +17,7 @@ import {
 } from "./config.js";
 import { buildUpstreamUrl, proxyRequest, readRequestBody, type UpstreamObservation } from "./proxy.js";
 import { applyInputFilter, emptyCounts, totalCount, type InputFilterCounts } from "./inputfilter.js";
+import { applyReasoning, type ReasoningInfo } from "./reasoning.js";
 import { buildModelCatalog, resolveModelRoute, RoutingError } from "./routing.js";
 import { RequestMetrics } from "./metrics.js";
 import { accessLines } from "./endpoint.js";
@@ -200,6 +202,8 @@ async function handleProxy(
   let completed = false;
   // 输入过滤计数：拿到路由后填充；即使随后连接失败，统计也能带上过滤结果。
   let inputFilter: InputFilterCounts = emptyCounts();
+  // 思考强度改写结果；`passthrough` / 未改写时为 null，统计里省略该字段。
+  let reasoning: ReasoningInfo | null = null;
   // 用 ref 容器持有观测结果：回调在闭包里赋值，容器属性访问不会被 TS 误收窄为 null。
   const observationRef: { current: UpstreamObservation | null } = { current: null };
 
@@ -236,6 +240,10 @@ async function handleProxy(
     }
 
     const filteredTotal = totalCount(inputFilter);
+    const extras = {
+      ...(filteredTotal > 0 ? { inputFilter } : {}),
+      ...(reasoning ? { reasoning } : {}),
+    };
     router.metrics.record({
       method: req.method ?? "GET",
       path: url.pathname,
@@ -244,7 +252,7 @@ async function handleProxy(
       status: finalStatus,
       durationMs,
       ok,
-      ...(filteredTotal > 0 ? { inputFilter } : {}),
+      ...extras,
     });
 
     const event: RequestEvent = {
@@ -264,7 +272,7 @@ async function handleProxy(
       finishReason: observation?.finishReason ?? null,
       rateLimit: observation?.rateLimit ?? null,
       termination,
-      ...(filteredTotal > 0 ? { inputFilter } : {}),
+      ...extras,
     };
     router.stats.record(event);
   };
@@ -325,6 +333,16 @@ async function handleProxy(
     debugLog("input-filter", "removed media parts", { path: url.pathname, ...filtered });
   }
 
+  const reasoningSetting = resolveReasoning(route.provider, route.model, url.pathname);
+  const reasoningResult = applyReasoning(forwardBody, url.pathname, reasoningSetting);
+  reasoning =
+    reasoningResult.applied === null
+      ? null
+      : { requested: reasoningResult.requested, applied: reasoningResult.applied };
+  if (reasoning) {
+    debugLog("reasoning", "applied reasoning effort", { path: url.pathname, ...reasoning });
+  }
+
   const upstreamUrl = buildUpstreamUrl(route.provider.baseUrl, url.pathname, url.search);
   const includeUsage =
     router.stats.isEnabled && bodyInfo.stream && isChatCompletions(url.pathname);
@@ -332,7 +350,7 @@ async function handleProxy(
     upstreamUrl,
     apiKey,
     model: route.model,
-    body: forwardBody,
+    body: reasoningResult.body,
     startedAt,
     includeUsage,
     observer: (observation) => {

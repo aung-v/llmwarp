@@ -81,3 +81,28 @@ test("请求指标透传输入过滤计数", () => {
   assert.equal(snapshot.recent[0]?.inputFilter, undefined);
   assert.deepEqual(snapshot.recent[1]?.inputFilter, { image: 2, audio: 1, file: 0, video: 0 });
 });
+
+test("请求指标透传思考强度结果", () => {
+  const metrics = new RequestMetrics(() => 1_000);
+  metrics.record({
+    method: "POST",
+    path: "/v1/chat/completions",
+    provider: "ark",
+    model: "doubao",
+    status: 200,
+    durationMs: 100,
+    reasoning: { requested: "medium", applied: "none" },
+  });
+  metrics.record({
+    method: "POST",
+    path: "/v1/chat/completions",
+    provider: "ark",
+    model: "doubao",
+    status: 200,
+    durationMs: 90,
+  });
+
+  const snapshot = metrics.snapshot();
+  assert.equal(snapshot.recent[0]?.reasoning, undefined);
+  assert.deepEqual(snapshot.recent[1]?.reasoning, { requested: "medium", applied: "none" });
+});

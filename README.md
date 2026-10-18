@@ -158,6 +158,32 @@ Relays often cap the request body (`413 Request Entity Too Large`) and some upst
 - Only unambiguous media parts are removed (Chat `image_url` / `input_audio` / `file`, Responses `input_image` / `input_audio` / `input_file`). Multipart uploads, `computer_call_output` screenshots and `code_interpreter_call.outputs` pass through untouched.
 - The stats JSONL row and the TUI activity panel show what was removed (`img×2 aud×1`); nothing else about the request changes.
 
+### Reasoning effort
+
+Some upstreams want an explicit thinking level; others reject or ignore the one the client sends. With the same three layers as the input filter, llmwarp can rewrite it before forwarding:
+
+```jsonc
+"providers": {
+  "ark": {
+    "baseUrl": "https://ark.cn-beijing.volces.com/api/v3",
+    "apiKey": "${ARK_API_KEY}",
+    "reasoning": "passthrough",              // default: leave the request untouched
+    "targets": {
+      "doubao-seed-1-6": {
+        "reasoning": "high",                 // this model always asks for high
+        "endpoints": { "/responses": { "reasoning": "off" } }  // …except here, thinking is off
+      }
+    }
+  }
+}
+```
+
+- Values: `passthrough` (default — the body is not even parsed), `off` (writes `none`), or one of `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` / `ultra`.
+- Layering matches the input filter: endpoint > model > provider, first layer that sets `reasoning` wins as a whole.
+- `/chat/completions` gets top-level `reasoning_effort`; `/responses` gets `reasoning.effort`. The equivalent field is deleted on the way, so a request never carries two conflicting values; every other path is untouched.
+- llmwarp does not probe what the upstream supports and never substitutes a value: an upstream error is passed through as-is.
+- The TUI activity row shows the rewrite, e.g. `rsn medium→high`.
+
 ## Development
 
 ```bash

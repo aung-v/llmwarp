@@ -15,8 +15,12 @@ import {
   normalizeTargets,
   normalizeEndpoint,
   resolveInputFilter,
+  normalizeReasoning,
+  resolveReasoning,
+  REASONING_SETTINGS,
   DEFAULT_STATS_CONFIG,
   type Config,
+  type Provider,
 } from "../src/config.js";
 
 test("joinUrl 去掉多余斜杠", () => {
@@ -231,4 +235,79 @@ test("resolveInputFilter 按 endpoint > model > provider 覆盖", () => {
   assert.deepEqual(resolveInputFilter(provider, undefined, "/v1/responses"), { image: true });
   // 完全没有配置时 undefined（等于全部不过滤）
   assert.equal(resolveInputFilter({ baseUrl: "http://x/v1", apiKey: "k" }, "m", "/v1/responses"), undefined);
+});
+
+test("normalizeReasoning 只接受固定集合并带字段路径报错", () => {
+  assert.equal(normalizeReasoning(undefined, "providers.ark.reasoning"), undefined);
+  assert.equal(normalizeReasoning(null, "providers.ark.reasoning"), undefined);
+  for (const value of REASONING_SETTINGS) {
+    assert.equal(normalizeReasoning(value, "p"), value);
+  }
+  assert.throws(
+    () => normalizeReasoning("maxx", "providers.ark.targets.doubao.reasoning"),
+    /providers\.ark\.targets\.doubao\.reasoning/,
+  );
+  assert.throws(
+    () => normalizeReasoning(3, "providers.ark.reasoning"),
+    /providers\.ark\.reasoning/,
+  );
+});
+
+test("normalizeTargets 解析模型 / endpoint 两层 reasoning", () => {
+  const targets = normalizeTargets(
+    {
+      doubao: {
+        reasoning: "high",
+        endpoints: { "/responses": { reasoning: "off", inputFilter: { image: true } } },
+      },
+    },
+    "providers.ark.targets",
+  );
+  assert.deepEqual(targets, {
+    doubao: {
+      reasoning: "high",
+      endpoints: { "/responses": { reasoning: "off", inputFilter: { image: true } } },
+    },
+  });
+  assert.throws(
+    () =>
+      normalizeTargets(
+        { doubao: { endpoints: { "/responses": { reasoning: "nope" } } } },
+        "providers.ark.targets",
+      ),
+    /providers\.ark\.targets\.doubao\.endpoints\.\/responses\.reasoning/,
+  );
+});
+
+test("resolveReasoning 按 endpoint > model > provider 覆盖，缺省 passthrough", () => {
+  const provider: Provider = {
+    baseUrl: "http://x/v1",
+    apiKey: "k",
+    models: ["doubao", "glm"],
+    reasoning: "low",
+    targets: {
+      doubao: {
+        reasoning: "medium",
+        endpoints: { "/responses": { reasoning: "off" } },
+      },
+    },
+  };
+  assert.equal(resolveReasoning(provider, "glm", "/v1/chat/completions"), "low");
+  assert.equal(resolveReasoning(provider, "doubao", "/v1/chat/completions"), "medium");
+  assert.equal(resolveReasoning(provider, "doubao", "/v1/responses"), "off");
+  assert.equal(resolveReasoning(provider, "doubao", "/responses"), "off");
+  assert.equal(resolveReasoning(provider, undefined, "/v1/responses"), "low");
+  assert.equal(resolveReasoning({ baseUrl: "http://x/v1", apiKey: "k" }, "m", "/v1/responses"), "passthrough");
+});
+
+test("两层都配时各自取自己的字段，互不覆盖", () => {
+  const provider: Provider = {
+    baseUrl: "http://x/v1",
+    apiKey: "k",
+    inputFilter: { image: true },
+    targets: { doubao: { endpoints: { "/responses": { reasoning: "high" } } } },
+  };
+  // endpoint 层只定义了 reasoning，inputFilter 回落到 provider 层
+  assert.deepEqual(resolveInputFilter(provider, "doubao", "/v1/responses"), { image: true });
+  assert.equal(resolveReasoning(provider, "doubao", "/v1/responses"), "high");
 });
