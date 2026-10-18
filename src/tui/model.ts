@@ -60,19 +60,19 @@ export interface CatalogItem {
   legacy?: boolean;
 }
 
-/** 确认态意图：切换模型 / 切换模型路由 / 重启守护进程 / 供应商操作菜单 / 删除供应商。 */
-export type ConfirmIntent = "switch" | "routing" | "restart" | "provider-action" | "remove-provider";
+/** 确认态意图：切换模型 / 切换 warp 模式 / 重启守护进程 / 供应商操作菜单 / 删除供应商。 */
+export type ConfirmIntent = "switch" | "mode" | "restart" | "provider-action" | "remove-provider";
 
-/** 顶部导航页：模型列表 / 模型路由模式 / 供应商管理 / 用量统计。 */
-export type TuiPage = "models" | "routing" | "providers" | "stats";
+/** 顶部导航页：模型列表 / 供应商管理 / 用量统计 / 运行状态（守护进程 + 反馈 + 请求活动）。 */
+export type TuiPage = "models" | "providers" | "stats" | "runtime";
 
 /** 顶部导航顺序，也决定 ←→ 切页面循环顺序。 */
-export const TUI_PAGES: TuiPage[] = ["models", "routing", "providers", "stats"];
+export const TUI_PAGES: TuiPage[] = ["models", "providers", "stats", "runtime"];
 
-/** 键盘焦点区域：导航栏 / 当前页列表 / 守护进程信息栏（含重启按钮）。 */
-export type TuiFocus = "nav" | "list" | "daemon";
+/** 键盘焦点区域：导航栏 / 当前页列表 / 当前页详情区（模型页 = 设置块，运行页 = 重启按钮）。 */
+export type TuiFocus = "nav" | "list" | "panel";
 
-/** 右下角反馈区的一条事件：动作结果 / 状态变化。 */
+/** 运行页反馈区的一条事件：动作结果 / 状态变化。 */
 export interface TuiEvent {
   time: string;
   kind: "ok" | "error" | "info";
@@ -80,11 +80,6 @@ export interface TuiEvent {
 }
 
 const MAX_EVENTS = 4;
-
-export interface RoutingOption {
-  useClientModel: boolean;
-  label: string;
-}
 
 /** 供应商管理页用的摘要，只读展示，不持有配置。 */
 export interface ProviderSummary {
@@ -101,18 +96,19 @@ export const PROVIDER_ACTIONS: { action: ProviderAction; label: string }[] = [
   { action: "remove", label: "删除" },
 ];
 
-/** 路由页固定两项，顺序即列表顺序。 */
-export const ROUTING_OPTIONS: RoutingOption[] = [
-  { useClientModel: true, label: "按客户端请求" },
-  { useClientModel: false, label: "统一用当前模型" },
-];
+/** 模型页设置块里的行；后续任务会往里面追加过滤四行与思考强度。 */
+export type SettingsRow = "image" | "audio" | "file" | "video" | "reasoning" | "mode";
+
+/** 设置块当前落地顺序：warp 模式固定在最后一行。 */
+export const SETTINGS_ROWS: SettingsRow[] = ["mode"];
 
 export interface TuiState {
   page: TuiPage;
   focus: TuiFocus;
   entries: CatalogItem[];
   selected: number;
-  routingSelected: number;
+  /** 模型页设置块的高亮行下标（配合 `SETTINGS_ROWS`）。 */
+  settingsCursor: number;
   providers: ProviderSummary[];
   providerCursor: number;
   /** 「编辑 / 删除」操作菜单的高亮项下标（0=编辑，1=删除）。 */
@@ -189,7 +185,7 @@ export function createTuiState(
     focus: "list",
     entries,
     selected: selected >= 0 ? selected : 0,
-    routingSelected: useClientModel ? 0 : 1,
+    settingsCursor: 0,
     providers,
     providerCursor: 0,
     providerActionIndex: 0,
@@ -218,7 +214,7 @@ function cyclePage(page: TuiPage, delta: number): TuiPage {
 export function focusNext(state: TuiState): TuiState {
   if (navigationLocked(state)) return state;
   if (state.focus === "nav") return { ...state, page: cyclePage(state.page, 1) };
-  if (state.focus === "list") return { ...state, focus: "daemon" };
+  if (state.focus === "list") return { ...state, focus: "panel" };
   return { ...state, focus: "list" };
 }
 
@@ -226,22 +222,23 @@ export function focusNext(state: TuiState): TuiState {
 export function focusPrev(state: TuiState): TuiState {
   if (navigationLocked(state)) return state;
   if (state.focus === "nav") return { ...state, page: cyclePage(state.page, -1) };
-  if (state.focus === "daemon") return { ...state, focus: "list" };
+  if (state.focus === "panel") return { ...state, focus: "list" };
   return { ...state, focus: "nav" };
 }
 
-/** ↑/↓：在当前页列表内移动选择；焦点在导航栏时进入列表，在守护进程栏时无操作。 */
+/** ↑/↓：在当前页列表或详情区内移动选择；焦点在导航栏时进入列表，详情区没有可选项时无操作。 */
 export function moveSelection(state: TuiState, delta: number): TuiState {
   if (navigationLocked(state)) return state;
   if (state.focus === "nav") return { ...state, focus: "list" };
-  if (state.focus === "daemon") return state;
 
-  if (state.page === "routing") {
+  if (state.focus === "panel") {
+    // 模型页：↑↓ 在设置块内选行；运行页只有重启按钮，没有选择；供应商页详情只读。
+    if (state.page !== "models") return state;
     const next = Math.min(
-      Math.max(state.routingSelected + delta, 0),
-      ROUTING_OPTIONS.length - 1,
+      Math.max(state.settingsCursor + delta, 0),
+      SETTINGS_ROWS.length - 1,
     );
-    return { ...state, routingSelected: next };
+    return { ...state, settingsCursor: next };
   }
 
   if (state.page === "providers") {
@@ -251,8 +248,8 @@ export function moveSelection(state: TuiState, delta: number): TuiState {
     return { ...state, providerCursor: next };
   }
 
-  if (state.page === "stats") {
-    // 统计页只做只读展示：详情固定为当前统计范围总计，不再跟随选中，因此 ↑↓ 无操作。
+  if (state.page === "stats" || state.page === "runtime") {
+    // 统计页与运行页只做只读展示，列表没有选择，↑↓ 无操作。
     return state;
   }
 
@@ -260,8 +257,9 @@ export function moveSelection(state: TuiState, delta: number): TuiState {
   return { ...state, selected: next };
 }
 
-export function selectedRouting(state: TuiState): RoutingOption {
-  return ROUTING_OPTIONS[state.routingSelected] ?? ROUTING_OPTIONS[0];
+/** 设置块当前高亮的行；越界收敛到最后一行（warp 模式）。 */
+export function selectedSettingsRow(state: TuiState): SettingsRow {
+  return SETTINGS_ROWS[state.settingsCursor] ?? SETTINGS_ROWS[SETTINGS_ROWS.length - 1];
 }
 
 /** 统计页 `h`：在 `STATS_WINDOWS` 的 5 个窗口间循环（`delta` = ±1）。 */
@@ -322,18 +320,23 @@ export function beginSwitchConfirm(state: TuiState): TuiState {
   return { ...state, confirming: "switch", message: null };
 }
 
-/** 路由页 Enter：进入“切换模型路由”确认态；选中项已是当前模式时不进入。 */
-export function beginRoutingConfirm(state: TuiState): TuiState {
-  if (navigationLocked(state) || state.page !== "routing") return state;
-  if (selectedRouting(state).useClientModel === state.useClientModel) {
-    return { ...state, message: "已是当前模式" };
-  }
-  return { ...state, confirming: "routing", message: null };
+/** warp 模式的目标值：Enter 始终切到另一档。 */
+export function targetModeValue(state: TuiState): boolean {
+  return !state.useClientModel;
 }
 
-/** 守护进程栏 Enter：进入“重启/启动 daemon”确认态。 */
+/** 模型页设置块的 warp 模式行 Enter：进入“切换 warp 模式”确认态。 */
+export function beginModeConfirm(state: TuiState): TuiState {
+  if (navigationLocked(state)) return state;
+  if (state.page !== "models" || state.focus !== "panel") return state;
+  if (selectedSettingsRow(state) !== "mode") return state;
+  return { ...state, confirming: "mode", message: null };
+}
+
+/** 运行页重启按钮 Enter：进入“重启/启动 daemon”确认态。 */
 export function beginRestartConfirm(state: TuiState): TuiState {
-  if (navigationLocked(state) || state.focus !== "daemon") return state;
+  if (navigationLocked(state)) return state;
+  if (state.page !== "runtime" || state.focus !== "panel") return state;
   return { ...state, confirming: "restart", message: null };
 }
 
@@ -394,7 +397,7 @@ export function cancelConfirm(state: TuiState): TuiState {
 }
 
 /**
- * 往右下角反馈区追加一条事件（最新在上）。自动刷新不得清除它，
+ * 往运行页反馈区追加一条事件（最新在上）。自动刷新不得清除它，
  * 也不需要用户按键关闭，随时间被新事件挤出即可。
  */
 export function pushEvent(state: TuiState, kind: TuiEvent["kind"], text: string): TuiState {
@@ -407,7 +410,8 @@ export function pushEvent(state: TuiState, kind: TuiEvent["kind"], text: string)
  * 再写入结果事件。漏清 switching 会让 refresh 提前返回、按键失效，TUI 卡住。
  */
 export function finishSuspended(state: TuiState, kind: TuiEvent["kind"], text: string): TuiState {
-  return pushEvent(finishSwitch(state, null), kind, text);
+  // 结果同时写进页脚：反馈区在运行页，从其他页发起的动作不能只留在那一页里。
+  return pushEvent(finishSwitch(state, text), kind, text);
 }
 
 export function beginSwitch(state: TuiState): TuiState | null {
@@ -421,8 +425,8 @@ export function finishSwitch(state: TuiState, message: string | null): TuiState 
   return { ...state, switching: false, message };
 }
 
-export function beginRouting(state: TuiState): TuiState | null {
-  if (state.confirming !== "routing" || state.switching) return null;
+export function beginModeSwitch(state: TuiState): TuiState | null {
+  if (state.confirming !== "mode" || state.switching) return null;
   return { ...state, confirming: null, switching: true, message: "切换中…" };
 }
 

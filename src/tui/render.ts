@@ -1,16 +1,17 @@
+import { homedir } from "node:os";
+import pc from "picocolors";
 import type { TuiEvent, TuiPage, TuiState } from "./model.js";
 import {
   PROVIDER_ACTIONS,
-  ROUTING_OPTIONS,
+  SETTINGS_ROWS,
   selectedEntry,
   selectedProvider,
-  selectedRouting,
+  selectedSettingsRow,
   statsWindowData,
 } from "./model.js";
 import type { AggregateMetrics } from "../stats/aggregate.js";
 import type { InputFilterCounts } from "../inputfilter.js";
 import type { ReasoningInfo } from "../reasoning.js";
-import pc from "picocolors";
 
 const ANSI_ESCAPE = /\u001B\[[0-?]*[ -/]*[@-~]|\u001B\][^\u0007]*(?:\u0007|\u001B\\)/g;
 
@@ -119,7 +120,7 @@ function navTabs(state: TuiState): string {
     : state.focus === "nav"
       ? pc.dim("  ←→ 切页面  ↑↓ 进入列表")
       : "";
-  return `${tab("models", "模型")} ${tab("routing", "模式")} ${tab("providers", "供应商")} ${tab("stats", "统计")}${hint}`;
+  return `${tab("models", "模型")} ${tab("providers", "供应商")} ${tab("stats", "统计")} ${tab("runtime", "运行")}${hint}`;
 }
 
 function modelRows(state: TuiState, height: number): string[] {
@@ -169,33 +170,28 @@ function modelRows(state: TuiState, height: number): string[] {
   return rows;
 }
 
-function routingRows(state: TuiState): string[] {
+function settingsRows(state: TuiState): string[] {
   const rows: string[] = [];
-  const busy = state.switching;
-  for (const [index, option] of ROUTING_OPTIONS.entries()) {
-    const selected = index === state.routingSelected;
-    const isCurrent = option.useClientModel === state.useClientModel;
-    const marker = selected ? "▸" : " ";
-    const text = `${marker} ${option.label}${isCurrent ? "  ● 当前" : ""}`;
-    if (busy) {
-      rows.push(pc.dim(text));
-    } else if (selected && state.focus === "list") {
-      rows.push(pc.bgBlue(pc.white(text)));
-    } else if (isCurrent) {
-      rows.push(pc.bold(pc.green(text)));
-    } else {
-      rows.push(text);
-    }
+  const focused = state.focus === "panel";
+  const current = selectedSettingsRow(state);
+
+  const row = (selected: boolean, text: string): void => {
+    if (state.switching) rows.push(pc.dim(text));
+    else if (selected && focused) rows.push(pc.bgBlue(pc.white(text)));
+    else rows.push(selected ? text : pc.dim(text));
+  };
+
+  for (const item of SETTINGS_ROWS) {
+    const selected = item === current;
+    if (item !== "mode") continue;
+    // 光标只在设置块获得焦点时出现，避免列表和右栏同时有两个 ▸。
+    const marker = selected && focused ? "▸" : " ";
+    row(selected, `${marker} warp 模式  ${routingLabel(state.useClientModel)}  全局`);
+    // 旧「模式」页关于 warp 写法的说明搬到这里，始终可见，随面板宽度截断。
+    rows.push(pc.dim("  客户端 warp / 留空 → 当前模型"));
+    rows.push(pc.dim("  客户端 供应商/模型 → 指定模型"));
+    rows.push(pc.dim("  统一用当前模型 → 忽略 model"));
   }
-  rows.push("");
-  rows.push(pc.dim("客户端 model 可写："));
-  rows.push(pc.dim("warp 或留空 → 当前激活模型"));
-  rows.push(pc.dim("{供应商}/{模型} → 指定模型"));
-  rows.push("");
-  rows.push(pc.dim("按客户端请求：以上都生效"));
-  rows.push(pc.dim("统一用当前模型：忽略 model"));
-  rows.push("");
-  rows.push(pc.dim("Enter 切换模式  ←→ 切页面/左右栏"));
   return rows;
 }
 
@@ -227,47 +223,69 @@ function restartButton(state: TuiState): string {
   const label = state.status ? "重启 daemon" : "启动 daemon";
   const inner = ` ${label} `;
   if (state.switching) return pc.dim(`[${inner}]`);
-  return state.focus === "daemon" ? pc.bgBlue(pc.white(`[${inner}]`)) : pc.dim(`[${inner}]`);
+  return state.focus === "panel" && state.page === "runtime"
+    ? pc.bgBlue(pc.white(`[${inner}]`))
+    : pc.dim(`[${inner}]`);
 }
 
-function daemonRows(state: TuiState): string[] {
+/** 守护进程字段；供应商页（窄栏）与运行页（宽栏）各自排版。 */
+function daemonFields(state: TuiState): [string, string][] {
   const status = state.status;
-  const routing = `模型模式  ${routingLabel(state.useClientModel)}`;
-  const button = restartButton(state);
-  const buttonHint = state.switching
-    ? pc.dim("处理中…")
-    : state.focus === "daemon"
-      ? status
-        ? pc.dim("Enter 进入确认（会中断 /v1 请求）")
-        : pc.dim("Enter 进入确认（启动守护进程）")
-      : pc.dim("←→ 移到此处可重启");
-
   if (!status) {
     return [
-      "状态      离线",
-      "供应商    —",
-      "模型      —",
-      routing,
-      "版本      —",
-      "接入地址  —",
-      "启动时间  —",
-      "配置文件  —",
-      button,
-      buttonHint,
+      ["状态", "离线"],
+      ["供应商", "—"],
+      ["模型", "—"],
+      ["版本", "—"],
+      ["接入地址", "—"],
+      ["启动时间", "—"],
+      ["配置文件", "—"],
     ];
   }
-
   return [
-    `状态      运行中`,
-    `供应商    ${sanitize(status.active?.provider ?? "—")}`,
-    `模型      ${status.active?.model ? sanitize(status.active.model) : "—"}`,
-    routing,
-    `版本      ${sanitize(status.version)}`,
-    `接入地址  ${sanitize(`http://127.0.0.1:${status.port}/v1`)}`,
-    `启动时间  ${sanitize(status.startedAt || "—")}`,
-    `配置文件  ${sanitize(status.configPath || "—")}`,
-    button,
-    buttonHint,
+    ["状态", "运行中"],
+    ["供应商", sanitize(status.active?.provider ?? "—")],
+    ["模型", status.active?.model ? sanitize(status.active.model) : "—"],
+    ["版本", sanitize(status.version)],
+    ["接入地址", sanitize(`http://127.0.0.1:${status.port}/v1`)],
+    ["启动时间", shortStartTime(status.startedAt)],
+    ["配置文件", shortPath(status.configPath)],
+  ];
+}
+
+/** 启动时间只保留 `MM-DD HH:mm`，完整值仍可从管理端 status 拿到。 */
+function shortStartTime(value: string): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return sanitize(value);
+  const month = (date.getMonth() + 1).toString().padStart(2, "0");
+  const day = date.getDate().toString().padStart(2, "0");
+  const hour = date.getHours().toString().padStart(2, "0");
+  const minute = date.getMinutes().toString().padStart(2, "0");
+  return `${month}-${day} ${hour}:${minute}`;
+}
+
+/** 配置路径里的 home 前缀缩成 `~`，给运行页的宽栏省出空间。 */
+function shortPath(value: string): string {
+  if (!value) return "—";
+  const home = homedir();
+  const text = home && value.startsWith(`${home}/`) ? `~${value.slice(home.length)}` : value;
+  return sanitize(text);
+}
+
+/** 供应商页右栏：只读的守护进程信息，重启按钮已经搬到运行页。 */
+function daemonInfoRows(state: TuiState): string[] {
+  return daemonFields(state).map(([label, value]) => `${label}      ${value}`);
+}
+
+/** 运行页顶部：宽栏下把 7 个字段压成 3 行，给反馈和活动留高度。 */
+function daemonWideRows(state: TuiState): string[] {
+  const fields = new Map(daemonFields(state));
+  const value = (key: string): string => fields.get(key) ?? "—";
+  return [
+    `状态 ${value("状态")}   供应商 ${value("供应商")}   模型 ${value("模型")}`,
+    `版本 ${value("版本")}   接入地址 ${value("接入地址")}`,
+    `启动时间 ${value("启动时间")}   配置文件 ${value("配置文件")}`,
   ];
 }
 
@@ -279,20 +297,15 @@ function shortTime(timestamp: string): string {
 }
 
 /**
- * 右下角统一反馈区：上半部分是动作结果 / 状态事件（最新在上），
- * 下半部分是请求活动。成功与失败都在这里，且不会被自动刷新清掉。
- *
- * 面板可用内容行数（`height`）很小，所以按优先级分配而不是简单拼接：
- * 指标块（有指标 3 行 / 无指标 4 行空态）永远优先；最新一条反馈保底 1 行、
- * 空间够时 2 行；事件与指标之间的空行第一个被牺牲，之后才轮到旧反馈与最近请求。
- * 旧反馈被整条丢弃是有意的：面板表达「最新状态」，不是完整日志。
+ * 运行页的反馈区：动作结果 / 状态事件，最新在上，自动刷新不清空。
+ * 内容超出高度时保留最新几条，并明确写出被隐藏的条数。
  */
 const EVENT_LINE_CAP = 2;
 
 /** 单条反馈事件最多 `EVENT_LINE_CAP` 行；被行数截断时补 `…`，与「本来就短」区分开。 */
 function eventRows(event: TuiEvent, wrapWidth: number): string[] {
   const mark =
-    event.kind === "ok" ? pc.green("✓") : event.kind === "error" ? pc.red("✗") : pc.dim("•");
+    event.kind === "ok" ? pc.green("✓") : event.kind === "error" ? pc.red("✗") : pc.dim("·");
   const wrapped = wrapSanitized(event.text, wrapWidth);
   const kept = wrapped.slice(0, EVENT_LINE_CAP);
   if (wrapped.length > kept.length && kept.length > 0) {
@@ -325,56 +338,56 @@ function reasoningSummary(reasoning: ReasoningInfo | undefined): string {
   return reasoning.requested ? `rsn ${reasoning.requested}` : "";
 }
 
-function activityRows(state: TuiState, height: number, width: number): string[] {
-  const innerWidth = Math.max(width - 4, 10);
-  const wrapWidth = Math.max(innerWidth - 9, 8);
-  const metrics = state.status?.metrics;
-  const metricRows = metrics ? 3 : 4;
-  const hasEvents = state.events.length > 0;
-
-  // 指标块（3 行 / 空态 4 行）无条件优先；`sep` 是第一个被牺牲的。
-  const available = height - metricRows;
-  let sep = 0;
-  let eventBudget = 0;
-  if (hasEvents && available > 0) {
-    sep = available >= 2 ? 1 : 0;
-    const shared = available - sep;
-    // 有指标且有最近请求时，只要空间够「最新一条 2 行 + 一条最近请求 2 行」，
-    // 就把一块额度留给最近请求，避免旧反馈吃光共享空间。
-    const recentReserve = metrics && metrics.recent.length > 0 && shared >= 4 ? 2 : 0;
-    eventBudget = shared - recentReserve;
+function feedbackRows(state: TuiState, height: number, width: number): string[] {
+  if (state.events.length === 0) return [pc.dim("暂无反馈")];
+  const wrapWidth = Math.max(width - 4 - 9, 8);
+  const blocks = state.events.map((event) => eventRows(event, wrapWidth));
+  const total = blocks.reduce((sum, lines) => sum + lines.length, 0);
+  let budget = height;
+  let note = false;
+  if (total > height) {
+    budget = Math.max(height - 1, 1);
+    note = true;
   }
 
   const rows: string[] = [];
-  let usedEventRows = 0;
-  for (const event of state.events) {
-    if (usedEventRows >= eventBudget) break;
-    const lines = eventRows(event, wrapWidth);
-    const take = Math.min(lines.length, eventBudget - usedEventRows);
+  let shown = 0;
+  for (const lines of blocks) {
+    if (rows.length >= budget) break;
+    const take = Math.min(lines.length, budget - rows.length);
     for (let index = 0; index < take; index += 1) rows.push(lines[index]);
-    usedEventRows += take;
-    // 预算不足、只放下某条事件的一部分时，同样补 `…`。
-    if (take < lines.length) rows[rows.length - 1] = `${rows[rows.length - 1]}…`;
+    if (take < lines.length && rows.length > 0) rows[rows.length - 1] = `${rows[rows.length - 1]}…`;
+    shown += 1;
   }
-  if (sep > 0) rows.push("");
+  const hidden = state.events.length - shown;
+  if (note && hidden > 0 && rows.length < height) {
+    rows.push(pc.dim(`… 另有 ${hidden} 条未显示`));
+  }
+  return rows;
+}
 
+/** 运行页请求活动：3 行近 60 秒指标永远优先，随后按高度放最近请求。 */
+function activityRows(state: TuiState, height: number, width: number): string[] {
+  const metrics = state.status?.metrics;
   if (!metrics) {
-    rows.push("暂无请求指标", pc.dim("重启 daemon 后启用"), "", pc.dim("只显示 /v1 请求，不含请求体"));
-    return rows;
+    return [pc.dim("暂无请求指标"), pc.dim("重启 daemon 后启用"), pc.dim("只显示 /v1 请求，不含请求体")];
   }
 
-  // 实时指标（内存，daemon 重启清零）：requestsPerMinute 与 requestsLastMinute 是同一个
-  // 60 秒窗口的同一个值，只展示一次；`平均耗时` 紧跟在 `近60秒` 之后以标明样本范围，
-  // `本次运行` 说明 `总计` 的起点。计数走 formatCount 折算 K/M/G（与统计页同一口径），
-  // 否则长跑 daemon 的累计值会把 72 列终端右栏（内宽 33）的行撑到截断。
-  rows.push(
+  const rows = [
     `近60秒 请求 ${formatCount(metrics.requestsLastMinute)} · 错误 ${formatCount(metrics.errorsLastMinute)}`,
     `平均耗时 ${metrics.averageDurationMs}ms`,
     `本次运行 请求 ${formatCount(metrics.totalRequests)} · 错误 ${formatCount(metrics.totalErrors)}`,
-  );
-  const remaining = height - metricRows - sep - usedEventRows;
-  const entryLimit = Math.max(Math.floor(remaining / 2), 0);
-  for (const request of metrics.recent.slice(0, entryLimit)) {
+  ];
+  const available = Math.max(height - rows.length, 0);
+  let take = Math.min(metrics.recent.length, Math.floor(available / 2));
+  let hidden = metrics.recent.length - take;
+  // 还有没显示的请求时，给 `… 另有 N 条未显示` 留一行。
+  while (take > 0 && hidden > 0 && available - take * 2 < 1) {
+    take -= 1;
+    hidden += 1;
+  }
+
+  for (const request of metrics.recent.slice(0, take)) {
     const filterSummary = inputFilterSummary(request.inputFilter);
     const reasonSummary = reasoningSummary(request.reasoning);
     rows.push(
@@ -382,8 +395,83 @@ function activityRows(state: TuiState, height: number, width: number): string[] 
       `  ${shortTime(sanitize(request.timestamp))} ${request.status ?? "ERR"} ${request.durationMs}ms${filterSummary ? ` ${filterSummary}` : ""}${reasonSummary ? ` ${reasonSummary}` : ""} ${request.provider && request.model ? `${sanitize(request.provider)}/${sanitize(request.model)}` : "—"}`,
     );
   }
-
+  if (hidden > 0 && rows.length < height) {
+    rows.push(pc.dim(`… 另有 ${hidden} 条未显示`));
+  }
   return rows;
+}
+
+/**
+ * 运行页：守护进程（含重启按钮）→ 反馈 → 请求活动，整页铺满。
+ * 高度不足时的优先级：重启按钮与 3 行指标永远保留，先砍活动条数、再砍反馈条数。
+ */
+function runtimePanels(state: TuiState, height: number, width: number): string[] {
+  const button = restartButton(state);
+  const buttonHint = state.switching
+    ? pc.dim("处理中…")
+    : state.focus === "panel"
+      ? state.status
+        ? pc.dim("Enter 进入确认（会中断 /v1 请求）")
+        : pc.dim("Enter 进入确认（启动守护进程）")
+      : pc.dim("←→ 移到下方按钮可重启");
+  // 守护进程面板按可用高度逐级降级，始终优先保住重启按钮，其次给活动区留指标。
+  // 8 行 = 3 行状态 + 空行 + 按钮 + 提示；更矮时依次砍提示、空行、启动时间/配置文件行。
+  const daemonHeight = height <= 3 ? height : Math.max(3, Math.min(8, height - 6));
+  const daemonContent = Math.max(daemonHeight - 2, 1);
+  const wide = daemonWideRows(state);
+  const daemonRows =
+    daemonContent >= 6
+      ? [...wide, "", button, buttonHint]
+      : daemonContent === 5
+        ? [...wide, button, buttonHint]
+        : daemonContent === 4
+          ? [...wide, button]
+          : daemonContent === 3
+            ? [wide[0], wide[1], button]
+            : daemonContent === 2
+              ? [wide[0], button]
+              : [button];
+  const daemonPanel = panel(
+    "守护进程",
+    daemonRows,
+    width,
+    daemonHeight,
+  );
+
+  let remaining = height - daemonPanel.length;
+  if (remaining < 3) return daemonPanel;
+
+  // 活动区至少留「3 行指标 + 1 条最近请求 + 隐藏提示」；没有请求时只留指标。
+  // 反馈区最多占剩余高度的 1/3，避免整页被历史事件吃掉。
+  const activityNeed = Math.min(remaining, state.status?.metrics?.recent.length ? 8 : 5);
+  const feedbackMax = Math.max(3, Math.floor(remaining / 3));
+  const feedbackWant = 2 + Math.max(state.events.length * 2, 1);
+  let feedbackHeight = Math.min(feedbackWant, feedbackMax, remaining - activityNeed);
+  if (feedbackHeight < 3) feedbackHeight = 0;
+  const activityHeight = remaining - feedbackHeight;
+
+  const panels = [...daemonPanel];
+  if (feedbackHeight >= 3) {
+    panels.push(
+      ...panel(
+        "反馈",
+        feedbackRows(state, feedbackHeight - 2, width),
+        width,
+        feedbackHeight,
+      ),
+    );
+  }
+  if (activityHeight >= 3) {
+    panels.push(
+      ...panel(
+        "请求活动",
+        activityRows(state, activityHeight - 2, width),
+        width,
+        activityHeight,
+      ),
+    );
+  }
+  return panels;
 }
 
 const SPARK_CHARS = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
@@ -610,13 +698,15 @@ function confirmationRows(state: TuiState): string[] {
       : ["当前选中的是不可切换项", "", "Esc 取消"];
   }
 
-  if (state.confirming === "routing") {
-    const target = selectedRouting(state);
+  if (state.confirming === "mode") {
+    const target = !state.useClientModel;
     return [
       `当前模式  ${routingLabel(state.useClientModel)}`,
-      `目标模式  ${target.label}`,
+      `目标模式  ${routingLabel(target)}`,
       "",
-      target.useClientModel
+      "客户端 model 可写 warp / 留空（→ 当前模型）或 供应商/模型（→ 指定模型）。",
+      "",
+      target
         ? "切换为「按客户端请求」？客户端写的模型名会生效。"
         : "切换为「统一用当前模型」？客户端请求的模型将被忽略。",
       "",
@@ -733,7 +823,7 @@ export function renderTui(
   ];
 
   const notice = confirmationRows(state);
-  const mainHeight = height - header.length - (notice.length > 0 ? notice.length + 2 : 1) - 1;
+  const mainHeight = height - header.length - (notice.length > 0 ? notice.length + 2 : 0) - 1;
   const leftWidth = Math.min(42, Math.floor(width * 0.48));
   const rightWidth = width - leftWidth - 1;
 
@@ -741,39 +831,19 @@ export function renderTui(
   if (state.page === "stats") {
     // 统计页需要完整宽度承载表格，不再拆分左右面板。
     body = panel("用量统计", statsRows(state, mainHeight - 2, width - 4), width, mainHeight);
+  } else if (state.page === "runtime") {
+    // 运行页整页铺开：守护进程 + 重启按钮、反馈、请求活动。
+    body = runtimePanels(state, mainHeight, width);
   } else {
-    const listTitle =
-      state.page === "providers" ? "供应商管理" : state.page === "routing" ? "模型模式" : "可切换模型";
+    const listTitle = state.page === "providers" ? "供应商管理" : "可切换模型";
     const listRows =
-      state.page === "providers"
-        ? providersRows(state)
-        : state.page === "routing"
-          ? routingRows(state)
-          : modelRows(state, mainHeight - 2);
+      state.page === "providers" ? providersRows(state) : modelRows(state, mainHeight - 2);
     const listPanel = panel(listTitle, listRows, leftWidth, mainHeight);
-    const daemonPanel = panel(
-      "守护进程",
-      daemonRows(state),
-      rightWidth,
-      // 固定 12 行（10 行内容 + 边框），保证「重启/启动」按钮和提示始终可见；
-      // 余下的高度留给右下角的「反馈 / 请求活动」面板。
-      Math.min(mainHeight, 12),
-    );
-    // 反馈面板至少要有「边框 + 1 行内容」才算一块面板，否则整帧会高于终端：
-    // 写满 height 行之后终端会滚动，ESC[H 重绘就整体错位（曾表现为确认框弹出时整屏花）。
-    const activityHeight = mainHeight - daemonPanel.length;
+    // 模型页右栏 = 选中模型设置；供应商页右栏 = 只读的守护进程信息。
     const rightPanel =
-      activityHeight >= 3
-        ? [
-            ...daemonPanel,
-            ...panel(
-              "反馈 / 请求活动",
-              activityRows(state, activityHeight - 2, rightWidth),
-              rightWidth,
-              activityHeight,
-            ),
-          ]
-        : daemonPanel;
+      state.page === "providers"
+        ? panel("守护进程", daemonInfoRows(state), rightWidth, Math.min(mainHeight, 9))
+        : panel("选中模型设置", settingsRows(state), rightWidth, mainHeight);
     body = sideBySide(listPanel, rightPanel);
   }
 
@@ -781,9 +851,19 @@ export function renderTui(
     ? "处理中… 请稍候（Ctrl-C 可退出）"
     : state.page === "stats"
       ? "h 切换统计范围 · ←→ 切页面/左右栏 · r 刷新 · q 退出"
+      : state.page === "runtime"
+        ? state.focus === "panel"
+          ? "Enter 重启 daemon · ←→ 切页面/焦点 · Esc 返回 · r 刷新 · q 退出"
+          : "←→ 移到重启按钮 · Esc 返回 · r 刷新 · q 退出"
       : state.page === "providers"
-        ? "↑↓ 选择 · Enter 操作菜单 · ←→ 切页面/左右栏 · Esc 返回 · r 刷新 · q 退出"
-        : "↑↓ 选择 · Enter 切换 · ←→ 切页面/左右栏 · Esc 返回 · r 刷新 · q 退出";
+        ? state.focus === "panel"
+          ? "←→ 切页面/焦点 · Esc 返回 · r 刷新 · q 退出"
+          : "↑↓ 选择 · Enter 操作菜单 · ←→ 切页面/左右栏 · Esc 返回 · r 刷新 · q 退出"
+        : state.focus === "list" && state.entries.length === 0
+          ? "←→ 切页面/左右栏 · Esc 返回 · r 刷新 · q 退出"
+        : state.focus === "panel"
+          ? "↑↓ 选择 · Enter 修改 · ←→ 切页面/左右栏 · Esc 返回 · r 刷新 · q 退出"
+          : "↑↓ 选择 · Enter 切换 · ←→ 切页面/左右栏 · Esc 返回 · r 刷新 · q 退出";
   const message = state.message && !state.switching && !state.confirming ? state.message : null;
   const footerText = message
     ? `${sanitize(message)}    ${keyHint}`
@@ -796,8 +876,8 @@ export function renderTui(
     ? "处理中"
     : state.confirming === "provider-action"
       ? (providerActionTarget ? sanitize(providerActionTarget.name) : "供应商操作")
-      : state.confirming === "routing"
-        ? "切换模型模式"
+      : state.confirming === "mode"
+        ? "切换 warp 模式"
         : state.confirming === "restart"
           ? "重启守护进程"
           : state.confirming === "remove-provider"
@@ -808,10 +888,10 @@ export function renderTui(
       ? panel(noticeTitle, notice, width, notice.length + 2)
       : [];
 
-  // 整帧重绘靠「每行等宽 + 行数不超 height」：draw() 是 ESC[H + 帧 + ESC[J，ED 0
-  // 只擦除光标之后的内容，擦不掉同一行光标之前的旧尾巴；而写满 height 行会让终端
-  // 滚动、整屏错位。把每行补齐/截断到 width，并在超高的极端情况下从 body 截掉多余
-  // 行（页脚与确认框永远保留），下一帧就会逐格覆盖上一帧。
+  // 整帧重绘靠「每行等宽 + 行数不超 height」：draw() 通过 frameToAnsi() 逐行绝对定位
+  // 覆盖，行尾 EL 擦掉剩余列，帧尾 ED 擦掉屏幕剩余部分；而写满 height 行会让终端滚动、
+  // 整屏错位。把每行补齐/截断到 width，并在超高的极端情况下从 body 截掉多余行（页脚与
+  // 确认框永远保留），下一帧就会逐格覆盖上一帧。
   const maxBody = Math.max(height - header.length - noticeRows.length - footer.length, 0);
   // 兜底：极端矮的终端 + 好几行确认框时，仍要保证不超过 height——多出来的行宁可裁掉，
   // 也不能让终端滚动（一滚动整屏就错位，就是「显示了两层」的来源）。

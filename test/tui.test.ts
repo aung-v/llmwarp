@@ -7,8 +7,8 @@ import {
   beginProviderEdit,
   beginRemoveProvider,
   beginRemoveProviderConfirm,
-  beginRouting,
-  beginRoutingConfirm,
+  beginModeConfirm,
+  beginModeSwitch,
   beginSwitch,
   beginSwitchConfirm,
   buildCatalog,
@@ -23,11 +23,13 @@ import {
   parseStatusSnapshot,
   pushEvent,
   restoreStatsView,
+  selectedSettingsRow,
   selectedProvider,
   selectedProviderAction,
   statsWindowData,
   toggleStatsWindow,
   TUI_PAGES,
+  type SettingsRow,
   type StatusSnapshot,
   type ProviderSummary,
   type TuiPage,
@@ -59,9 +61,9 @@ const config: Config = {
   },
 };
 
-/** 走真实键位路径切到路由页：← 到导航栏 → → 切页面 → ↓ 把焦点落回列表。 */
-function openRoutingPage(state: TuiState): TuiState {
-  return moveSelection(focusNext(focusPrev(state)), 1);
+/** 模型页把焦点落到右栏设置块。 */
+function focusSettings(state: TuiState): TuiState {
+  return focusNext(state);
 }
 
 /** 按导航顺序切到指定页并把焦点落回列表；不依赖页数，新增页面也不会失效。 */
@@ -107,6 +109,48 @@ test("buildCatalog 保留配置中缺少的 active 模型", () => {
   assert.equal(entries.at(-1)?.legacy, true);
 });
 
+test("buildCatalog 过滤非法模型名", () => {
+  const entries = buildCatalog({
+    ...config,
+    providers: {
+      ark: {
+        baseUrl: "https://ark.test/v1",
+        apiKey: "secret-key",
+        models: ["good-model", "bad name", "bad\u0001name", "   ", ""],
+      },
+    },
+  });
+
+  assert.deepEqual(entries.map((entry) => entry.model), ["good-model"]);
+  assert.equal(entries[0]?.selectable, true);
+});
+
+test("buildCatalog 对全非法模型列表给出不可选占位", () => {
+  const entries = buildCatalog({
+    ...config,
+    providers: {
+      ark: { baseUrl: "https://ark.test/v1", apiKey: "secret-key", models: ["a b", "\u0001"] },
+    },
+  });
+
+  assert.deepEqual(entries.map((entry) => entry.label), ["ark/(no models)"]);
+  assert.equal(entries[0]?.selectable, false);
+});
+
+test("buildCatalog 不把非法的 active 模型加入可切换列表", () => {
+  const entries = buildCatalog(
+    {
+      ...config,
+      providers: {
+        ark: { baseUrl: "https://ark.test/v1", apiKey: "secret-key", models: ["good-model"] },
+      },
+    },
+    { ...status, active: { provider: "ark", model: "bad model" } },
+  );
+
+  assert.deepEqual(entries.map((entry) => entry.label), ["ark/good-model"]);
+});
+
 test("TUI 选择有边界且确认可以取消", () => {
   const entries = buildCatalog(config);
   let state = createTuiState(entries, status);
@@ -129,35 +173,35 @@ test("导航栏 ←→ 切页面，↑↓ 把焦点落回列表", () => {
   assert.equal(state.focus, "nav");
 
   state = focusNext(state);
-  assert.equal(state.page, "routing");
+  assert.equal(state.page, "providers");
   assert.equal(state.focus, "nav");
 
   state = moveSelection(state, 1);
   assert.equal(state.focus, "list");
 });
 
-test("←→ 在列表与守护进程栏之间移动焦点", () => {
+test("←→ 在列表与详情区之间移动焦点", () => {
   let state = createTuiState(buildCatalog(config), status);
   assert.equal(state.focus, "list");
 
   state = focusNext(state);
-  assert.equal(state.focus, "daemon");
+  assert.equal(state.focus, "panel");
   state = focusNext(state);
   assert.equal(state.focus, "list");
   state = focusPrev(state);
   assert.equal(state.focus, "nav");
 });
 
-test("路由页 ↑↓ 切换选择且不越界", () => {
-  let state = openRoutingPage(createTuiState(buildCatalog(config), status, true));
-  assert.equal(state.routingSelected, 0);
+test("设置块 ↑↓ 切换选择且不越界", () => {
+  let state = focusSettings(createTuiState(buildCatalog(config), status, true));
+  assert.equal(state.focus, "panel");
+  assert.equal(state.settingsCursor, 0);
+  assert.equal(selectedSettingsRow(state), "mode");
 
   state = moveSelection(state, 1);
-  assert.equal(state.routingSelected, 1);
-  state = moveSelection(state, 1);
-  assert.equal(state.routingSelected, 1);
+  assert.equal(state.settingsCursor, 0, "只有一行时不该越界");
   state = moveSelection(state, -1);
-  assert.equal(state.routingSelected, 0);
+  assert.equal(state.settingsCursor, 0);
 });
 
 test("只有确认后才会进入切换状态", () => {
@@ -175,29 +219,37 @@ test("只有确认后才会进入切换状态", () => {
 });
 
 test("渲染包含状态且不泄露密钥", () => {
-  const state = createTuiState(buildCatalog(config), status);
-  const output = renderTui(state, { height: 24, width: 80 });
+  const models = renderTui(createTuiState(buildCatalog(config), status), {
+    height: 24,
+    width: 80,
+  });
+  assert.match(models, /llmwarp TUI/);
+  assert.match(models, /当前激活/);
+  assert.match(models, /可切换模型/);
+  assert.match(models, /选中模型设置/);
+  assert.match(models, /ark\/glm-5\.3-flash/);
+  assert.match(models, /↑↓ 选择/);
+  assert.match(models, /\[ 模型 \]/);
+  assert.match(models, /\[ 运行 \]/);
+  assert.doesNotMatch(models, /secret-key/);
 
-  assert.match(output, /llmwarp TUI/);
-  assert.match(output, /当前激活/);
-  assert.match(output, /可切换模型/);
-  assert.match(output, /守护进程/);
-  assert.match(output, /运行中/);
-  assert.match(output, /http:\/\/127\.0\.0\.1:8787\/v1/);
-  assert.match(output, /ark\/glm-5\.3-flash/);
-  assert.match(output, /当前激活/);
-  assert.match(output, /↑↓ 选择/);
-  assert.match(output, /\[ 模型 \]/);
-  assert.match(output, /\[ 模式 \]/);
-  assert.match(output, /2026-09-27T00:00:00\.000Z/);
-  assert.doesNotMatch(output, /secret-key/);
+  const runtime = renderTui(
+    openPage(createTuiState(buildCatalog(config), status), "runtime"),
+    { height: 24, width: 80 },
+  );
+  assert.match(runtime, /守护进程/);
+  assert.match(runtime, /运行中/);
+  assert.match(runtime, /http:\/\/127\.0\.0\.1:8787\/v1/);
+  assert.match(runtime, /启动时间 \d{2}-\d{2} \d{2}:\d{2}/);
+  assert.doesNotMatch(runtime, /secret-key/);
 });
 
-test("渲染请求活动面板和手动刷新提示", () => {
-  const state = createTuiState(buildCatalog(config), status);
-  const output = renderTui(state, { height: 24, width: 80 });
+test("运行页渲染请求活动和手动刷新提示", () => {
+  const output = renderTui(openPage(createTuiState(buildCatalog(config), status), "runtime"), {
+    height: 24,
+    width: 80,
+  });
 
-  assert.doesNotMatch(output, /日志/);
   assert.match(output, /请求活动/);
   assert.match(output, /r 刷新/);
 });
@@ -224,7 +276,7 @@ test("渲染请求活动统计和最近请求", () => {
       }],
     },
   });
-  const output = renderTui(state, { height: 24, width: 80 });
+  const output = renderTui(openPage(state, "runtime"), { height: 24, width: 80 });
 
   assert.match(output, /请求活动/);
   assert.match(output, /近60秒 请求 2 · 错误 0/);
@@ -250,8 +302,8 @@ test("请求活动面板在 72 列下用 K/M 折算大数，不截断", () => {
       recent: [],
     },
   });
-  // 最小终端宽：右栏内宽只有 33 列，原样输出 1234567 / 12345 会把「本次运行」行截断。
-  const output = renderTui(state, { height: 24, width: 72 });
+  // 运行页在最小终端宽下也不能把大数撑到截断。
+  const output = renderTui(openPage(state, "runtime"), { height: 24, width: 72 });
 
   assert.match(output, /近60秒 请求 1\.2K · 错误 12\.3K/);
   assert.match(output, /平均耗时 99999ms/);
@@ -259,8 +311,8 @@ test("请求活动面板在 72 列下用 K/M 折算大数，不截断", () => {
   assert.doesNotMatch(output, /RPM/);
 });
 
-test("离线时守护进程栏显示启动按钮且不自动启动 daemon", () => {
-  const state = createTuiState(buildCatalog(config), null);
+test("离线时运行页显示启动按钮且不自动启动 daemon", () => {
+  const state = openPage(createTuiState(buildCatalog(config), null), "runtime");
   const output = renderTui(state, { height: 24, width: 80 });
 
   assert.match(output, /离线/);
@@ -268,8 +320,8 @@ test("离线时守护进程栏显示启动按钮且不自动启动 daemon", () =
   assert.doesNotMatch(output, /\[ 重启 daemon \]/);
 });
 
-test("守护进程栏显示重启按钮，聚焦时进入确认提示", () => {
-  const focused = focusNext(createTuiState(buildCatalog(config), status));
+test("运行页显示重启按钮，聚焦时进入确认提示", () => {
+  const focused = focusNext(openPage(createTuiState(buildCatalog(config), status), "runtime"));
   const output = renderTui(focused, { height: 24, width: 80 });
 
   assert.match(output, /\[ 重启 daemon \]/);
@@ -277,7 +329,9 @@ test("守护进程栏显示重启按钮，聚焦时进入确认提示", () => {
 });
 
 test("重启确认文案说明会中断 /v1 请求", () => {
-  const confirming = beginRestartConfirm(focusNext(createTuiState(buildCatalog(config), status)));
+  const confirming = beginRestartConfirm(
+    focusNext(openPage(createTuiState(buildCatalog(config), status), "runtime")),
+  );
   const output = renderTui(confirming, { height: 24, width: 80 });
 
   assert.match(output, /重启守护进程/);
@@ -285,8 +339,10 @@ test("重启确认文案说明会中断 /v1 请求", () => {
   assert.match(output, /Enter 确认重启\s+Esc 取消/);
 });
 
-test("离线时守护进程栏确认走启动文案", () => {
-  const confirming = beginRestartConfirm(focusNext(createTuiState(buildCatalog(config), null)));
+test("离线时运行页确认走启动文案", () => {
+  const confirming = beginRestartConfirm(
+    focusNext(openPage(createTuiState(buildCatalog(config), null), "runtime")),
+  );
   const output = renderTui(confirming, { height: 24, width: 80 });
 
   assert.match(output, /守护进程未运行，将启动一个新的守护进程/);
@@ -294,7 +350,9 @@ test("离线时守护进程栏确认走启动文案", () => {
 });
 
 test("动作进行中控件渲染为不可用态", () => {
-  const busy = beginRestart(beginRestartConfirm(focusNext(createTuiState(buildCatalog(config), status))));
+  const busy = beginRestart(
+    beginRestartConfirm(focusNext(openPage(createTuiState(buildCatalog(config), status), "runtime"))),
+  );
   assert.ok(busy);
   const output = renderTui(busy, { height: 24, width: 80 });
 
@@ -337,7 +395,7 @@ test("渲染会清除配置文本中的控制序列", () => {
     ...status,
     configPath: "\u001B[31m/tmp/dangerous/config.jsonc\u001B[0m",
   });
-  const output = renderTui(state, { height: 24, width: 80 });
+  const output = renderTui(openPage(state, "runtime"), { height: 24, width: 80 });
 
   assert.doesNotMatch(output, /\u001B\[31m/);
   assert.match(output, /\/tmp\/dangerous\/config\.jsonc/);
@@ -434,36 +492,37 @@ test("处理中… 只出现在 switching 状态，动作结束后不再残留",
   assert.doesNotMatch(finished, /处理中…/);
 });
 
-test("状态区展示模型模式，且与 useClientModel 一致", () => {
+test("模型页设置块展示 warp 模式与说明，且与 useClientModel 一致", () => {
   const entries = buildCatalog(config);
   const clientMode = renderTui(createTuiState(entries, status, true), { height: 24, width: 80 });
   const unifiedMode = renderTui(createTuiState(entries, status, false), { height: 24, width: 80 });
 
-  assert.match(clientMode, /模型模式\s+按客户端请求/);
-  assert.doesNotMatch(clientMode, /统一用当前模型/);
-  assert.match(unifiedMode, /模型模式\s+统一用当前模型/);
-  assert.doesNotMatch(unifiedMode, /按客户端请求/);
+  assert.match(clientMode, /warp 模式\s+按客户端请求/);
+  assert.match(clientMode, /全局/);
+  assert.match(clientMode, /客户端 warp \/ 留空 → 当前模型/);
+  assert.match(clientMode, /客户端 供应商\/模型 → 指定模型/);
+  assert.match(clientMode, /统一用当前模型 → 忽略 model/);
+  assert.match(unifiedMode, /warp 模式\s+统一用当前模型/);
+  // 旧页名不再出现
+  assert.doesNotMatch(clientMode, /模型模式/);
 });
 
-test("离线状态区同样展示模型模式", () => {
+test("离线时设置块同样展示 warp 模式", () => {
   const output = renderTui(createTuiState(buildCatalog(config), null, false), {
     height: 24,
     width: 80,
   });
 
-  assert.match(output, /模型模式\s+统一用当前模型/);
+  assert.match(output, /warp 模式\s+统一用当前模型/);
+  assert.match(output, /选中模型设置/);
 });
 
-test("路由页 Enter 进入路由确认态，Esc 取消且不影响 switch 确认", () => {
-  // 选中与当前模式不同的一项才会进入确认
-  let state = {
-    ...openRoutingPage(createTuiState(buildCatalog(config), status, true)),
-    routingSelected: 1,
-  };
+test("设置块 Enter 进入 warp 模式确认态，Esc 取消且不影响 switch 确认", () => {
+  let state = focusSettings(createTuiState(buildCatalog(config), status, true));
 
-  state = beginRoutingConfirm(state);
-  assert.equal(state.confirming, "routing");
-  // switch 意图不能越过路由确认直接触发
+  state = beginModeConfirm(state);
+  assert.equal(state.confirming, "mode");
+  // switch 意图不能越过模式确认直接触发
   assert.equal(beginSwitch(state), null);
 
   state = cancelConfirm(state);
@@ -471,49 +530,40 @@ test("路由页 Enter 进入路由确认态，Esc 取消且不影响 switch 确�
   assert.equal(state.switching, false);
 });
 
-test("路由页选中当前模式时不进入确认", () => {
-  const state = openRoutingPage(createTuiState(buildCatalog(config), status, true));
-  assert.equal(state.routingSelected, 0);
-
-  const same = beginRoutingConfirm(state);
-  assert.equal(same.confirming, null);
-  assert.equal(same.message, "已是当前模式");
-});
-
-test("模型页不会误入路由确认，路由确认也不能覆盖模型确认", () => {
-  // 模型页 beginRoutingConfirm 不生效
+test("列表焦点 / 其他页不会误入 warp 模式确认", () => {
   const onModels = createTuiState(buildCatalog(config), status, true);
-  assert.equal(beginRoutingConfirm(onModels).confirming, null);
+  assert.equal(beginModeConfirm(onModels).confirming, null);
 
   let state = beginSwitchConfirm(onModels);
   assert.equal(state.confirming, "switch");
-  // 已有 switch 确认态时，路由确认不能改变意图
-  assert.equal(beginRoutingConfirm({ ...state, page: "routing" }).confirming, "switch");
-  // routing 的 begin 不能消费 switch 确认
-  assert.equal(beginRouting(state), null);
+  // 已有 switch 确认态时，模式确认不能改变意图
+  assert.equal(beginModeConfirm({ ...state, focus: "panel" }).confirming, "switch");
+  assert.equal(beginModeSwitch(state), null);
 
   state = cancelConfirm(state);
-  state = beginRoutingConfirm({
-    ...openRoutingPage(state),
-    routingSelected: 1,
-  });
-  assert.equal(state.confirming, "routing");
-  assert.equal(beginRoutingConfirm(state).confirming, "routing");
+  const settings = focusSettings(state);
+  state = beginModeConfirm(settings);
+  assert.equal(state.confirming, "mode");
+  assert.equal(beginModeConfirm(state).confirming, "mode");
 
-  const routing = beginRouting(state);
-  assert.ok(routing);
-  assert.equal(routing?.confirming, null);
-  assert.equal(routing?.switching, true);
+  const switching = beginModeSwitch(state);
+  assert.ok(switching);
+  assert.equal(switching?.confirming, null);
+  assert.equal(switching?.switching, true);
 });
 
-test("重启确认只能从守护进程栏进入", () => {
+test("重启确认只能从运行页的重启按钮进入", () => {
   let state = createTuiState(buildCatalog(config), status);
   // 焦点在列表时不能进入重启确认，也不能直接触发重启
   assert.equal(beginRestartConfirm(state).confirming, null);
   assert.equal(beginRestart(state), null);
 
+  // 模型页右栏不是重启按钮
+  assert.equal(beginRestartConfirm(focusSettings(state)).confirming, null);
+
+  state = openPage(state, "runtime");
   state = focusNext(state);
-  assert.equal(state.focus, "daemon");
+  assert.equal(state.focus, "panel");
   state = beginRestartConfirm(state);
   assert.equal(state.confirming, "restart");
 
@@ -527,67 +577,21 @@ test("重启确认只能从守护进程栏进入", () => {
   assert.equal(restarted?.switching, true);
 });
 
-test("路由确认态文案说明后果", () => {
+test("warp 模式确认态文案说明后果", () => {
   const entries = buildCatalog(config);
-  // routingSelected 默认对齐当前模式；这里显式选中另一项以进入确认
   const toConfirm = (useClientModel: boolean) =>
-    beginRoutingConfirm({
-      ...openRoutingPage(createTuiState(entries, status, useClientModel)),
-      routingSelected: useClientModel ? 1 : 0,
-    });
+    beginModeConfirm(focusSettings(createTuiState(entries, status, useClientModel)));
   const toUnified = renderTui(toConfirm(true), { height: 24, width: 80 });
   const toClient = renderTui(toConfirm(false), { height: 24, width: 80 });
 
   assert.match(toUnified, /当前模式\s+按客户端请求/);
   assert.match(toUnified, /切换为「统一用当前模型」？客户端请求的模型将被忽略。/);
-  assert.match(toUnified, /切换模型模式/);
+  assert.match(toUnified, /切换 warp 模式/);
   assert.match(toClient, /当前模式\s+统一用当前模型/);
   assert.match(toClient, /切换为「按客户端请求」？客户端写的模型名会生效。/);
 });
 
-test("buildCatalog 过滤非法模型名", () => {
-  const entries = buildCatalog({
-    ...config,
-    providers: {
-      ark: {
-        baseUrl: "https://ark.test/v1",
-        apiKey: "secret-key",
-        models: ["good-model", "bad name", "bad\u0001name", "   ", ""],
-      },
-    },
-  });
-
-  assert.deepEqual(entries.map((entry) => entry.model), ["good-model"]);
-  assert.equal(entries[0]?.selectable, true);
-});
-
-test("buildCatalog 对全非法模型列表给出不可选占位", () => {
-  const entries = buildCatalog({
-    ...config,
-    providers: {
-      ark: { baseUrl: "https://ark.test/v1", apiKey: "secret-key", models: ["a b", "\u0001"] },
-    },
-  });
-
-  assert.deepEqual(entries.map((entry) => entry.label), ["ark/(no models)"]);
-  assert.equal(entries[0]?.selectable, false);
-});
-
-test("buildCatalog 不把非法的 active 模型加入可切换列表", () => {
-  const entries = buildCatalog(
-    {
-      ...config,
-      providers: {
-        ark: { baseUrl: "https://ark.test/v1", apiKey: "secret-key", models: ["good-model"] },
-      },
-    },
-    { ...status, active: { provider: "ark", model: "bad model" } },
-  );
-
-  assert.deepEqual(entries.map((entry) => entry.label), ["ark/good-model"]);
-});
-
-test("页脚只提示基础按键，且统一「选择 / 切换 / Esc 返回」措辞", () => {
+test("模型页页脚提示基础按键，且统一「选择 / 切换 / Esc 返回」措辞", () => {
   const output = renderTui(createTuiState(buildCatalog(config), status), { height: 24, width: 80 });
 
   assert.match(output, /↑↓ 选择 · Enter 切换 · ←→ 切页面\/左右栏 · Esc 返回 · r 刷新 · q 退出/);
@@ -595,62 +599,95 @@ test("页脚只提示基础按键，且统一「选择 / 切换 / Esc 返回」�
   assert.doesNotMatch(output, /换页|换区/);
   assert.doesNotMatch(output, /m 切换路由模式/);
   assert.doesNotMatch(output, /y 确认/);
+
+  const settings = renderTui(focusSettings(createTuiState(buildCatalog(config), status)), {
+    height: 24,
+    width: 80,
+  });
+  assert.match(settings, /↑↓ 选择 · Enter 修改/);
 });
 
-test("渲染导航栏并标记模式页内容，且说明 warp 写法", () => {
-  const routing = renderTui(
-    openRoutingPage(createTuiState(buildCatalog(config), status, true)),
-    { height: 24, width: 80 },
-  );
+test("模型页渲染选中模型设置块与 warp 说明，且不泄露密钥", () => {
+  const output = renderTui(createTuiState(buildCatalog(config), status, true), {
+    height: 24,
+    width: 80,
+  });
 
-  assert.match(routing, /模型模式/);
-  assert.match(routing, /按客户端请求/);
-  assert.match(routing, /统一用当前模型/);
-  assert.match(routing, /warp/);
-  assert.match(routing, /\{供应商\}\/\{模型\}/);
-  assert.doesNotMatch(routing, /secret-key/);
-  // 页面不再出现用户可见的「路由」，且提示用「Enter 切换模式」
-  assert.doesNotMatch(routing, /路由/);
-  assert.match(routing, /Enter 切换模式/);
+  assert.match(output, /可切换模型/);
+  assert.match(output, /选中模型设置/);
+  assert.match(output, /warp 模式/);
+  assert.match(output, /按客户端请求/);
+  assert.match(output, /warp \/ 留空 → 当前模型/);
+  assert.match(output, /供应商\/模型 → 指定模型/);
+  assert.doesNotMatch(output, /secret-key/);
+  // 用户可见文案里不再有「模型模式」「路由」。
+  assert.doesNotMatch(output, /模型模式|路由/);
 
-  // 最小终端宽（72）下，模式页说明不被面板截断
-  const narrow = renderTui(
-    openRoutingPage(createTuiState(buildCatalog(config), status, true)),
-    { height: 24, width: 72 },
-  );
-  assert.match(narrow, /warp 或留空 → 当前激活模型/);
-  assert.match(narrow, /\{供应商\}\/\{模型\} → 指定模型/);
-  assert.match(narrow, /统一用当前模型：忽略 model/);
+  // 最小终端宽（72）下说明仍然完整可见。
+  const narrow = renderTui(createTuiState(buildCatalog(config), status, true), {
+    height: 24,
+    width: 72,
+  });
+  assertFrameFits(narrow, 72, 24, "72 列模型页");
+  assert.match(narrow, /客户端 warp \/ 留空/);
 });
 
-test("右下角反馈区显示动作结果：成功与失败都要可见", () => {
-  const base = createTuiState(buildCatalog(config), status);
-
-  const ok = renderTui(pushEvent(base, "ok", "已启动 daemon"), { height: 30, width: 90 });
-  assert.match(ok, /反馈 \/ 请求活动/);
-  assert.match(ok, /✓/);
-  assert.match(ok, /已启动 daemon/);
-
-  const failed = renderTui(
-    pushEvent(base, "error", "启动 daemon 失败：\n配置文件不存在，先运行 llmwarp init"),
-    { height: 30, width: 90 },
+test("运行页展示守护进程、重启按钮、反馈与请求活动", () => {
+  const base = withFeedbackEvents(
+    openPage(createTuiState(buildCatalog(config), feedbackStatus), "runtime"),
+    ["已启动 daemon"],
   );
-  assert.match(failed, /✗/);
-  assert.match(failed, /启动 daemon 失败/);
-  assert.match(failed, /配置文件不存在/);
-  // 长错误会按面板宽度折行，断言不会被折行切断的关键片段
-  assert.match(failed, /llmwarp/);
+  const frame = renderTui(base, { height: 30, width: 90 });
+
+  assert.match(frame, /\[ 运行 \]/);
+  assert.match(frame, /╭ 守护进程/);
+  assert.match(frame, /状态 运行中/);
+  assert.match(frame, /接入地址 http:\/\/127\.0\.0\.1:8787\/v1/);
+  assert.match(frame, /\[ 重启 daemon \]/);
+  assert.match(frame, /╭ 反馈/);
+  assert.match(frame, /已启动 daemon/);
+  assert.match(frame, /╭ 请求活动/);
+  assert.match(frame, /近60秒 请求 1\.2K/);
+  assertFrameFits(frame, 90, 30, "运行页");
+
+  // 焦点移到重启按钮后页脚给出 Enter 提示。
+  const focused = focusNext(base);
+  assert.equal(focused.focus, "panel");
+  assert.match(renderTui(focused, { height: 30, width: 90 }), /Enter 重启 daemon/);
 });
 
-test("反馈区保留最近事件且不打断确认流程", () => {
-  const base = pushEvent(createTuiState(buildCatalog(config), status), "ok", "已启动 daemon");
+test("重启确认期间反馈仍然可见", () => {
+  const base = withFeedbackEvents(
+    openPage(createTuiState(buildCatalog(config), status), "runtime"),
+    ["已启动 daemon"],
+  );
   const confirming = beginRestartConfirm(focusNext(base));
   const out = renderTui(confirming, { height: 30, width: 90 });
 
-  // 反馈区仍在，最近事件可见
   assert.match(out, /已启动 daemon/);
-  // 同时显示重启确认流程
   assert.match(out, /重启守护进程/);
+  assertFrameFits(out, 90, 30, "重启确认 + 反馈");
+});
+
+test("运行页矮终端下重启按钮与指标优先，被截断的条数有提示", () => {
+  const long = Array.from({ length: 4 }, (_, index) => `第${index + 1}条反馈`);
+  const base = withFeedbackEvents(
+    openPage(createTuiState(buildCatalog(config), feedbackStatus), "runtime"),
+    long,
+  );
+
+  for (const height of [12, 16, 20, 24, 30]) {
+    const frame = renderTui(base, { height, width: 80 });
+    assertFrameFits(frame, 80, height, `运行页 ${height} 行`);
+    assert.match(frame, /\[ 重启 daemon \]/, `${height} 行下重启按钮必须可见`);
+    if (height >= 16) {
+      assert.match(frame, /近60秒 请求/, `${height} 行下指标必须可见`);
+    }
+  }
+
+  // 放不下时明确写出隐藏了多少条。
+  const compact = renderTui(base, { height: 20, width: 80 });
+  assert.match(compact, /另有 \d+ 条未显示/);
 });
 
 test("供应商页 ↑↓ 覆盖供应商行与添加行（0..providers.length）", () => {
@@ -768,13 +805,17 @@ test("挂起动作结束必须清除在途标志并写入结果（删除路径�
   assert.equal(done.switching, false, "结束后必须清在途标志，否则 refresh 与按键会被卡住");
   assert.equal(done.events[0]?.kind, "ok");
   assert.equal(done.events[0]?.text, "删除供应商 ark");
+  // 结果同时留在页脚：反馈区在运行页，不能只在那一页可见。
+  assert.equal(done.message, "删除供应商 ark");
 
   const failed = finishSuspended(running as TuiState, "error", "删除供应商失败：x");
   assert.equal(failed.switching, false);
   assert.equal(failed.events[0]?.kind, "error");
+  assert.equal(failed.message, "删除供应商失败：x");
+  assert.match(renderTui(failed, { height: 24, width: 80 }), /删除供应商失败：x/);
 });
 
-test("导航栏现在是 模型 / 模式 / 供应商 / 统计 四页循环", () => {
+test("导航栏现在是 模型 / 供应商 / 统计 / 运行 四页循环", () => {
   let state = createTuiState(buildCatalog(config), status, true, providerList);
   state = focusPrev(state); // list → nav（停在模型页）
   assert.equal(state.focus, "nav");
@@ -882,7 +923,7 @@ test("重启动作结束后必须清除「处理中」并留下成功事件", ()
   const running = renderTui(state, { height: 30, width: 90 });
   assert.doesNotMatch(running, /处理中/);
 
-  state = beginRestartConfirm({ ...state, focus: "daemon" });
+  state = beginRestartConfirm({ ...state, page: "runtime", focus: "panel" });
   assert.equal(state.confirming, "restart");
   const inFlight = beginRestart(state);
   assert.ok(inFlight, "确认态下应能进入重启在途状态");
@@ -1485,6 +1526,9 @@ test("模型页空态只提示 q 退出，不再出现死提示 Enter 确认", (
   assert.match(output, /q 退出/);
   assert.doesNotMatch(output, /Enter 确认/);
   assert.doesNotMatch(output, /暂无模型[\s\S]*Enter 确认/);
+  // 空列表上 ↑↓ / Enter 都是空操作，页脚不能宣传它们。
+  assert.doesNotMatch(output, /↑↓ 选择|Enter 切换/);
+  assert.match(output, /←→ 切页面\/左右栏 · Esc 返回 · r 刷新 · q 退出/);
 });
 
 test("全 TUI 页面页脚都不再出现「换页」「换区」", () => {
@@ -1607,7 +1651,10 @@ function assertFrameFits(frame: string, width: number, height: number, label: st
 }
 
 test("反馈面板：24 行下指标三行与最新反馈首行同时可见", () => {
-  const state = withFeedbackEvents(createTuiState(buildCatalog(config), feedbackStatus), longFeedback);
+  const state = withFeedbackEvents(
+    openPage(createTuiState(buildCatalog(config), feedbackStatus), "runtime"),
+    longFeedback,
+  );
   const frame = renderTui(state, { height: 24, width: 80 });
 
   // 指标块无条件优先：三行全部可见。
@@ -1616,11 +1663,15 @@ test("反馈面板：24 行下指标三行与最新反馈首行同时可见", ()
   assert.match(frame, /本次运行 请求 1\.2M · 错误 12\.3K/);
   // 最新一条反馈保底 1 行；被行进预算截断时补 `…`。
   assert.match(frame, /切换失败：上游返回 429…/);
+  assert.match(frame, /✗/);
   assertFrameFits(frame, 80, 24, "24 行长反馈 + 指标");
 });
 
 test("反馈面板：30 行下保留至少一条最近请求，旧反馈可被丢弃", () => {
-  const state = withFeedbackEvents(createTuiState(buildCatalog(config), feedbackStatus), longFeedback);
+  const state = withFeedbackEvents(
+    openPage(createTuiState(buildCatalog(config), feedbackStatus), "runtime"),
+    longFeedback,
+  );
   const frame = renderTui(state, { height: 30, width: 80 });
 
   assert.match(frame, /近60秒 请求 1\.2K · 错误 12/);
@@ -1628,15 +1679,18 @@ test("反馈面板：30 行下保留至少一条最近请求，旧反馈可被�
   assert.match(frame, /本次运行 请求 1\.2M · 错误 12\.3K/);
   assert.match(frame, /POST \/v1\/chat\/completions/);
   assert.match(frame, /200 120ms ark\/glm-5\.3-flash/);
-  // 面板表达「最新状态」，放不下的旧反馈整条丢弃。
+  // 反馈区最多占剩余高度的 1/3，放不下的旧事件整条丢弃并给出条数提示。
+  assert.match(frame, /令牌配额不足/);
   assert.doesNotMatch(frame, /已重启 daemon：旧端口已释放/);
+  assert.match(frame, /另有 \d+ 条未显示/);
   assertFrameFits(frame, 80, 30, "30 行长反馈 + 指标");
 });
 
 test("反馈面板：单条事件最多 2 行，截断补 …", () => {
-  const state = withFeedbackEvents(createTuiState(buildCatalog(config), status), [
-    "第1行\n第2行\n第3行\n第4行",
-  ]);
+  const state = withFeedbackEvents(
+    openPage(createTuiState(buildCatalog(config), status), "runtime"),
+    ["第1行\n第2行\n第3行\n第4行"],
+  );
   const frame = renderTui(state, { height: 30, width: 90 });
 
   assert.match(frame, /第1行/);
@@ -1646,7 +1700,9 @@ test("反馈面板：单条事件最多 2 行，截断补 …", () => {
 
   // 本来就放得下的事件不得被加上 `…`：截断必须与「内容本来就短」可区分。
   const shortFrame = renderTui(
-    withFeedbackEvents(createTuiState(buildCatalog(config), status), ["短的一条反馈"]),
+    withFeedbackEvents(openPage(createTuiState(buildCatalog(config), status), "runtime"), [
+      "短的一条反馈",
+    ]),
     { height: 30, width: 90 },
   );
   const shortLine = shortFrame.split("\n").find((line) => line.includes("短的一条反馈")) ?? "";
@@ -1654,24 +1710,24 @@ test("反馈面板：单条事件最多 2 行，截断补 …", () => {
   assert.doesNotMatch(shortLine, /…/);
 });
 
-test("反馈面板：无事件时内容与顺序不变，指标上方不留空行", () => {
-  const frame = renderTui(createTuiState(buildCatalog(config), feedbackStatus), {
-    height: 24,
-    width: 80,
-  });
-  const lines = frame.split("\n");
-  const titleIndex = lines.findIndex((line) => line.includes("反馈 / 请求活动"));
-  assert.ok(titleIndex >= 0, "反馈面板标题应存在");
-  // 面板标题下一行直接是指标首行，而不是被牺牲掉的分隔空行。
-  assert.match(lines[titleIndex + 1] ?? "", /近60秒 请求 1\.2K · 错误 12/);
+test("运行页：无事件时显示空反馈，请求活动照常", () => {
+  const frame = renderTui(
+    openPage(createTuiState(buildCatalog(config), feedbackStatus), "runtime"),
+    { height: 24, width: 80 },
+  );
+  assert.match(frame, /╭ 反馈/);
+  assert.match(frame, /暂无反馈/);
+  assert.match(frame, /╭ 请求活动/);
+  assert.match(frame, /近60秒 请求 1\.2K · 错误 12/);
   assert.match(frame, /POST \/v1\/chat\/completions/);
   assertFrameFits(frame, 80, 24, "无事件 + 指标");
 });
 
 test("反馈面板：无指标空态不被事件挤没，帧不超高度", () => {
-  const state = withFeedbackEvents(createTuiState(buildCatalog(config), { ...status, metrics: null }), [
-    "上线成功\n监听 8787",
-  ]);
+  const state = withFeedbackEvents(
+    openPage(createTuiState(buildCatalog(config), { ...status, metrics: null }), "runtime"),
+    ["上线成功\n监听 8787"],
+  );
 
   const frame = renderTui(state, { height: 30, width: 80 });
   assert.match(frame, /上线成功/);
@@ -1687,7 +1743,10 @@ test("反馈面板：无指标空态不被事件挤没，帧不超高度", () =>
 });
 
 test("反馈面板：最长反馈 + 最大计数下帧不变量仍成立", () => {
-  const state = withFeedbackEvents(createTuiState(buildCatalog(config), feedbackStatus), longFeedback);
+  const state = withFeedbackEvents(
+    openPage(createTuiState(buildCatalog(config), feedbackStatus), "runtime"),
+    longFeedback,
+  );
   for (const width of [72, 80, 90, 100]) {
     for (const height of [12, 16, 20, 24, 30, 34]) {
       assertFrameFits(renderTui(state, { height, width }), width, height, `长反馈 ${height}x${width}`);
@@ -1759,7 +1818,7 @@ test("请求活动行显示输入过滤摘要，全 0 / 缺省不显示", () => 
       recent: [{ ...recent, inputFilter: { image: 2, audio: 1, file: 0, video: 0 } }],
     },
   });
-  const output = renderTui(filtered, { height: 24, width: 120 });
+  const output = renderTui(openPage(filtered, "runtime"), { height: 24, width: 120 });
   assert.match(output, /img×2 aud×1/);
   assert.doesNotMatch(output, /fil×/);
   assert.doesNotMatch(output, /vid×/);
@@ -1776,7 +1835,7 @@ test("请求活动行显示输入过滤摘要，全 0 / 缺省不显示", () => 
       recent: [{ ...recent, inputFilter: { image: 0, audio: 0, file: 0, video: 0 } }],
     },
   });
-  const plain = renderTui(zeroed, { height: 24, width: 120 });
+  const plain = renderTui(openPage(zeroed, "runtime"), { height: 24, width: 120 });
   assert.match(plain, /200 120ms ark\/glm-5\.3-flash/);
   assert.doesNotMatch(plain, /img×/);
 });
@@ -1849,17 +1908,26 @@ test("请求活动行显示思考强度摘要，未改写不显示", () => {
   });
 
   const overridden = renderTui(
-    createTuiState(buildCatalog(config), snapshot({ reasoning: { requested: "medium", applied: "high" } })),
+    openPage(
+      createTuiState(buildCatalog(config), snapshot({ reasoning: { requested: "medium", applied: "high" } })),
+      "runtime",
+    ),
     { height: 24, width: 120 },
   );
   assert.match(overridden, /rsn medium→high/);
 
   const injected = renderTui(
-    createTuiState(buildCatalog(config), snapshot({ reasoning: { requested: null, applied: "none" } })),
+    openPage(
+      createTuiState(buildCatalog(config), snapshot({ reasoning: { requested: null, applied: "none" } })),
+      "runtime",
+    ),
     { height: 24, width: 120 },
   );
   assert.match(injected, /rsn —→none/);
 
-  const plain = renderTui(createTuiState(buildCatalog(config), snapshot({})), { height: 24, width: 120 });
+  const plain = renderTui(
+    openPage(createTuiState(buildCatalog(config), snapshot({})), "runtime"),
+    { height: 24, width: 120 },
+  );
   assert.doesNotMatch(plain, /rsn /);
 });

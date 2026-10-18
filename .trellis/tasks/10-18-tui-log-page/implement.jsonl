@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/frontend/interaction-guidelines.md", "reason": "TUI 导航 / 焦点区域 / 页面结构约定"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "质量门与测试习惯"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "写盘 / reload 失败时的错误呈现"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "TUI 写配置 → daemon reload 的闭环"}
+{"file": ".trellis/tasks/10-18-input-media-filter/design-ui.md", "reason": "右栏「选中模型设置」块的终态与任务间依赖顺序（过滤四行由该任务追加）"}

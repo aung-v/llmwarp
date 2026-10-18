@@ -25,14 +25,14 @@ const {
 const { adminRequest, stopDaemon } = await import("../src/daemon.js");
 const { startServer } = await import("../src/server.js");
 const { applyActiveSelection, applyRoutingMode, restartDaemon } = await import("../src/tui/index.js");
-const { beginRoutingConfirm, cancelConfirm, createTuiState, focusNext, focusPrev, moveSelection } =
+const { beginModeConfirm, cancelConfirm, createTuiState, focusNext } =
   await import("../src/tui/model.js");
 
 const socketSkip = await skipWithoutSockets();
 
-/** 走真实键位路径切到路由页：← 到导航栏 → → 切页面 → ↓ 把焦点落回列表。 */
-function openRoutingPage(state: ReturnType<typeof createTuiState>): ReturnType<typeof createTuiState> {
-  return moveSelection(focusNext(focusPrev(state)), 1);
+/** 模型页把焦点落到右栏设置块（warp 模式所在行）。 */
+function focusSettings(state: ReturnType<typeof createTuiState>): ReturnType<typeof createTuiState> {
+  return focusNext(state);
 }
 
 const COMMENTED_CONFIG = `{
@@ -163,18 +163,14 @@ test("切换后配置文件与 daemon 状态一致", { skip: socketSkip }, async
   }
 });
 
-test("路由确认取消：不写配置、不启动 daemon", () => {
+test("warp 模式确认取消：不写配置、不启动 daemon", () => {
   clearDaemonInfo();
   mkdirSync(CONFIG_DIR, { recursive: true });
   writeFileSync(CONFIG_PATH, COMMENTED_CONFIG);
   const before = readFileSync(CONFIG_PATH, "utf8");
 
-  // 选中与当前模式相反的一项，否则 beginRoutingConfirm 只提示“已是当前模式”。
-  const confirming = beginRoutingConfirm({
-    ...openRoutingPage(createTuiState([], null, true)),
-    routingSelected: 1,
-  });
-  assert.equal(confirming.confirming, "routing");
+  const confirming = beginModeConfirm(focusSettings(createTuiState([], null, true)));
+  assert.equal(confirming.confirming, "mode");
   const cancelled = cancelConfirm(confirming);
   assert.equal(cancelled.confirming, null);
 
@@ -182,7 +178,7 @@ test("路由确认取消：不写配置、不启动 daemon", () => {
   assert.equal(existsSync(DAEMON_PATH), false);
 });
 
-test("daemon 未运行时切换路由仍落盘且保留注释", async () => {
+test("daemon 未运行时切换 warp 模式仍落盘且保留注释", async () => {
   clearDaemonInfo();
   mkdirSync(CONFIG_DIR, { recursive: true });
   writeFileSync(CONFIG_PATH, COMMENTED_CONFIG);

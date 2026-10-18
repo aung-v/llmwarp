@@ -27,3 +27,11 @@ _Avoid_: reasoning 模式、thinking 开关
 **Reasoning level（思考等级）**:
 llmwarp 固定提供的一组等级名：none / minimal / low / medium / high / xhigh / max / ultra；关闭等于 none。
 _Avoid_: effort 名单、上游等级
+
+**Warp mode（warp 模式）**:
+TUI 里的一个**全局**开关（配置键仍是 `useClientModel`）：按客户端请求里的 `model` 名转发，还是统一替换成当前选中的模型。它不是按模型的设置。
+_Avoid_: 模型模式、路由模式、模型路由
+
+**Settings block（选中模型设置）**:
+模型页右栏、随选中模型变化的那一块：按模型列出输入过滤开关与思考强度，末尾是全局的 warp 模式行。
+_Avoid_: 面板、弹窗、浮动层

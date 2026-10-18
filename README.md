@@ -29,7 +29,7 @@ Client base URLs and model names are usually hardcoded, so every provider change
 - Upstream URL = `baseUrl` + the client path with its `/v1` prefix removed. `baseUrl` does not have to end in `/v1`: `https://api.deepseek.com/v1` with a request to `/v1/chat/completions` becomes `https://api.deepseek.com/v1/chat/completions`.
 - Responses, including SSE, are streamed straight through - nothing is buffered.
 - The provider and model are snapshotted when a request starts, so switching mid-flight never disturbs requests already running.
-- The TUI's mode page can force every request to the current model, ignoring whatever model name the client sends.
+- The TUI's global `warp 模式` row on the 模型 page can force every request to the current model, ignoring whatever model name the client sends.
 
 ## Install
 
@@ -76,17 +76,18 @@ The port is not hardcoded: the daemon uses `"port"` from the config file (`8787`
 
 `llmwarp tui` opens the persistent management UI in the screenshot above.
 
-- Four pages - 模型 Models / 模式 Mode / 供应商 Providers / 统计 Stats - selected with `<-` `->` at the top. `<-` `->` also moves focus between the left column and the daemon panel.
-- `up` / `down` select within the current page's list. The stats page has no selection, only the `h` range switch.
-- `Enter` acts on the highlighted item: switching model or mode and restarting the daemon all ask for confirmation (`Enter` confirms, `Esc` cancels); on the providers page it opens an action menu (edit / remove, remove asks again). `[ + 添加供应商 ]` starts `llmwarp add`.
-- The mode page picks 按客户端请求 or 统一用当前模型, and the daemon panel always shows which one is active. The daemon panel also shows 重启 daemon while the daemon runs, and 启动 daemon when it is down.
+- Four pages - 模型 Models / 供应商 Providers / 统计 Stats / 运行 Runtime - selected with `<-` `->` at the top. `<-` `->` also moves focus between the page list and its detail area.
+- `up` / `down` select within the current page's list. On the 模型 page the right-hand `选中模型设置` block is focusable: `<-` `->` switches between the list and the block, `up` / `down` picks a row, and `Enter` changes it. The stats and runtime pages have no selection.
+- `Enter` acts on the highlighted item: switching model and changing 运行 controls ask for confirmation (`Enter` confirms, `Esc` cancels); on the providers page it opens an action menu (edit / remove, remove asks again). `[ + 添加供应商 ]` starts `llmwarp add`.
+- The 模型 page's `选中模型设置` block carries the four input-filter toggles, the 思考强度 row (default 不修改), and the global `warp 模式` row. `warp 模式` is still the `useClientModel` switch - 按客户端请求 honours the client's model name (`warp` / empty means the active model, `provider/model` means that model), while 统一用当前模型 ignores it. The inline hints under the row explain this; the mode confirmation restates the consequence.
+- The 运行 page shows the daemon panel (状态 / 供应商 / 模型 / 版本 / 接入地址 / 启动时间 / 配置文件, plus 重启 daemon while it runs and 启动 daemon when it is down), the 反馈 panel (recent action results, not cleared by auto-refresh), and the 请求活动 panel (last-60-second metrics plus recent requests with `img×2 aud×1` / `rsn medium→high` summaries). `<-` `->` moves focus onto the restart button. When the terminal is short, recent requests and older feedback are cut first and the hidden count is shown; the button and the three metric lines stay.
 - The stats page has a range selector cycled with `h`: 最近10条 / 近1小时 / 今天 / 近7天 / 近30天. 「最近10条」means each provider/model/endpoint's own latest 10 requests, not the global latest 10, so a busy upstream cannot hide the others. The target table (request count, error rate, TTFT, tok/s per provider/model/endpoint) and the totals block below it are both recomputed for the selected range; the sparkline always shows the last 30 days of daily tokens, with min/max/current marked.
 - Only requests actually forwarded upstream are counted; routing failures are reported separately as 未发出 N. Cancelled clients count as 中断 and stay out of the error-rate denominator. End-to-end latency is deliberately not shown per target - answer length dominates it, which makes cross-provider comparison misleading.
 - `r` refreshes (auto-refresh runs every 3 seconds), `q` or `Ctrl-C` exits without stopping the daemon. The UI only uses arrow keys plus `Enter` / `Esc` / `h` / `r` / `q`; there are no single-letter action shortcuts.
 
 History is stored as JSONL under `~/.config/llmwarp/stats/YYYY-MM-DD.jsonl` and survives daemon restarts (30 days by default; `stats.retentionDays` configures it, `stats.enabled=false` turns collection off entirely). Expired files are pruned once at daemon startup - nothing scans or reads the directory while running.
 
-> The 请求活动 panel on the right is in-memory and realtime (last 60 seconds, plus totals since this daemon started) and resets on restart; the stats page is historical and range-based. They intentionally do not share a definition.
+> The 请求活动 panel on the 运行 page is in-memory and realtime (last 60 seconds, plus totals since this daemon started) and resets on restart; the stats page is historical and range-based. They intentionally do not share a definition.
 
 ## Commands
 
@@ -157,6 +158,7 @@ Relays often cap the request body (`413 Request Entity Too Large`) and some upst
 - Removed parts leave one note per content array in the first removed position, e.g. `[llmwarp: removed 2 images, 1 file]`. The request is still forwarded - llmwarp never rejects or answers locally.
 - Only unambiguous media parts are removed (Chat `image_url` / `input_audio` / `file`, Responses `input_image` / `input_audio` / `input_file`). Multipart uploads, `computer_call_output` screenshots and `code_interpreter_call.outputs` pass through untouched.
 - The stats JSONL row and the TUI activity panel show what was removed (`img×2 aud×1`); nothing else about the request changes.
+- In the TUI, select the model on the 模型 page and toggle 图片过滤 / 音频过滤 / 文件过滤 / 视频过滤 in the `选中模型设置` block (`<-` `->` to the block, `up` / `down` to the row, `Enter` to toggle). It writes `providers.<p>.targets.<m>.inputFilter` and reloads the daemon.
 
 ### Reasoning effort
 

@@ -8,7 +8,7 @@
 |---|---|
 | Providers, base URLs, model lists | `~/.llmwarp/config.jsonc` through `src/config.ts` |
 | Active provider/model | `activeProvider`/`activeModel` in config, with safe fallback by `resolveActive()` |
-| Model routing mode | `useClientModel` in config; the TUI writes it with `setUseClientModel()` then calls `POST /_llmwarp/reload` |
+| Warp mode (`warp 模式`) | `useClientModel` in config; the TUI writes it with `setUseClientModel()` then calls `POST /_llmwarp/reload` |
 | Daemon process and admin token | `~/.llmwarp/daemon.json` and `src/daemon.ts` |
 | Request statistics (history) | `<CONFIG_DIR>/stats/YYYY-MM-DD.jsonl`, written by the daemon; the TUI only reads the aggregate from `GET /_llmwarp/status` |
 | Prompt/filter/local wizard state | Local variables inside the command flow |
@@ -25,7 +25,7 @@
 - The `统计` page keeps one piece of ephemeral view state in `TuiState`: `statsWindow` (one of the five `STATS_WINDOWS`). It is view state, not data: the aggregate stays the single source of truth, and auto-refresh restores it via `restoreStatsView(previous, next)`. The page has **no selected-row state**: the `当前统计范围总计` block is always `statsWindowData(state).overall`, so a refresh never needs to re-locate anything by `provider/model/endpoint`.
 - An auto-refresh must never overwrite a newer user state. `refresh()` captures the state it started from and, once its I/O resolves, abandons the write-back if `state` has been replaced in the meantime (a confirmation opened, an action started, a selection moved). Without that guard a slow `GET /_llmwarp/status` resolves after the user has confirmed a restart, rebuilds `state` from scratch, clears `switching`, and the UI leaves 处理中 while the action is still running.
 - Every in-flight action must repaint on completion, explicitly: after `finishSwitch()`/`finishSuspended()` the loop must `draw()` **before** calling `refresh()`, because `refresh()` bails out silently while another refresh is in flight. Otherwise the last frame on screen stays 处理中 (or blank, after the suspended-CLI `resume()` clears the screen) even though the action already finished.
-- A finished action must be observable in two places: the bottom-right `反馈 / 请求活动` event (persists across refreshes) and the footer message passed to `refresh(message)`. The footer message is cleared by the next auto-refresh, so it can never be the only signal.
+- A finished action must be observable in two places: the `反馈` panel on the `运行` page (persists across refreshes) and the footer message passed to `refresh(message)`. The footer message is cleared by the next auto-refresh, so it can never be the only signal.
 - A TUI daemon restart is an explicit confirmed action that reuses `stopDaemon()` / `startDaemon()`; the TUI still does not own the lifecycle. It must wait for the old pid to exit before starting, because the port is unchanged and a still-alive old daemon keeps answering the reused keep-alive connection with its old token. After the restart, the new pid and token are re-read from `daemon.json` on the next request, so do not cache them.
 
 ## Future Dashboard

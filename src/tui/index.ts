@@ -23,10 +23,10 @@ import {
   beginProviderEdit,
   beginRemoveProvider,
   beginRemoveProviderConfirm,
+  beginModeConfirm,
+  beginModeSwitch,
   beginRestart,
   beginRestartConfirm,
-  beginRouting,
-  beginRoutingConfirm,
   beginSwitch,
   beginSwitchConfirm,
   buildCatalog,
@@ -41,10 +41,11 @@ import {
   parseStatusSnapshot,
   pushEvent,
   restoreStatsView,
+  SETTINGS_ROWS,
   selectedEntry,
   selectedProvider,
   selectedProviderAction,
-  selectedRouting,
+  targetModeValue,
   toggleStatsWindow,
   type CatalogItem,
   type ProviderSummary,
@@ -224,7 +225,7 @@ export async function startTui(): Promise<void> {
         : -1;
       const previousPage = base.page;
       const previousFocus = base.focus;
-      const previousRoutingSelected = base.routingSelected;
+      const previousSettingsCursor = base.settingsCursor;
       const previousProviderCursor = base.providerCursor;
       const previousProviderActionIndex = base.providerActionIndex;
       const previousConfirming = base.confirming;
@@ -232,13 +233,16 @@ export async function startTui(): Promise<void> {
       const previousProviderName = selectedProvider(base)?.name ?? null;
       const previousEvents = base.events;
       state = createTuiState(entries, status, useClientModel, providers);
-      // 右下角反馈区的内容不能被自动刷新清掉。
+      // 运行页反馈区的内容不能被自动刷新清掉。
       state.events = previousEvents;
       if (previousSelected >= 0) state.selected = previousSelected;
       state.page = previousPage;
       state.focus = previousFocus;
-      // 用户停留在路由页时不因自动刷新重置其选择；否则跟随配置里的当前模式。
-      if (previousPage === "routing") state.routingSelected = previousRoutingSelected;
+      // 模型页设置块的光标是纯视图状态，刷新后按行数收敛。
+      state.settingsCursor = Math.min(
+        previousSettingsCursor,
+        Math.max(SETTINGS_ROWS.length - 1, 0),
+      );
       // 供应商页同理：光标要保住并收敛到有效范围（供应商行 + [添加] 行，索引 0..n）。
       state.providerCursor = Math.min(previousProviderCursor, Math.max(providers.length, 0));
       state.providerActionIndex = previousProviderActionIndex;
@@ -246,9 +250,13 @@ export async function startTui(): Promise<void> {
       state = restoreStatsView(base, state);
       if (previousConfirming === "switch") {
         state.confirming = state.entries[state.selected]?.selectable ? "switch" : null;
-      } else if (previousConfirming === "routing" && previousPage === "routing") {
-        state.confirming = "routing";
-      } else if (previousConfirming === "restart" && previousFocus === "daemon") {
+      } else if (previousConfirming === "mode" && previousPage === "models") {
+        state.confirming = "mode";
+      } else if (
+        previousConfirming === "restart" &&
+        previousPage === "runtime" &&
+        previousFocus === "panel"
+      ) {
         state.confirming = "restart";
       } else if (
         (previousConfirming === "remove-provider" || previousConfirming === "provider-action") &&
@@ -292,42 +300,37 @@ export async function startTui(): Promise<void> {
 
     const entry = selectedEntry(state);
     if (!entry?.model) {
-      state = pushEvent(finishSwitch(state, null), "error", "未选择可切换的模型");
+      const text = "未选择可切换的模型";
+      state = pushEvent(finishSwitch(state, text), "error", text);
       draw();
       return;
     }
 
     try {
       await applyActiveSelection(entry.provider, entry.model);
-      state = pushEvent(finishSwitch(state, null), "ok", `已切换到 ${entry.label}`);
-      // 先立刻重绘：结束「处理中」并让右下角结果马上可见，不依赖 refresh 是否被跳过。
+      const label = `已切换到 ${entry.label}`;
+      state = pushEvent(finishSwitch(state, label), "ok", label);
+      // 先立刻重绘：结束「处理中」并让运行页反馈区的结果马上可见，不依赖 refresh 是否被跳过。
       draw();
       await refresh(`已切换到 ${entry.label}`);
     } catch (err) {
-      state = pushEvent(
-        finishSwitch(state, null),
-        "error",
-        `切换模型失败：\n${(err as Error).message}`,
-      );
+      const text = `切换模型失败：${(err as Error).message}`;
+      state = pushEvent(finishSwitch(state, text), "error", text);
       draw();
     }
   };
 
-  const confirmRouting = async (): Promise<void> => {
-    const nextValue = selectedRouting(state).useClientModel;
-    const routingState = beginRouting(state);
-    if (!routingState) return;
-    state = routingState;
+  const confirmMode = async (): Promise<void> => {
+    const nextValue = targetModeValue(state);
+    const modeState = beginModeSwitch(state);
+    if (!modeState) return;
+    state = modeState;
     draw();
 
     try {
       await applyRoutingMode(nextValue);
       const label = nextValue ? "已切换为按客户端请求" : "已切换为统一用当前模型";
-      state = pushEvent(
-        finishSwitch(state, null),
-        "ok",
-        label,
-      );
+      state = pushEvent(finishSwitch(state, label), "ok", label);
       draw();
       await refresh(label);
     } catch (err) {
@@ -338,8 +341,9 @@ export async function startTui(): Promise<void> {
       } catch {
         // 配置不可读时保留当前显示
       }
+      const text = `切换模式失败：${(err as Error).message}`;
       state = {
-        ...pushEvent(finishSwitch(state, null), "error", `切换模式失败：\n${(err as Error).message}`),
+        ...pushEvent(finishSwitch(state, text), "error", text),
         useClientModel: mode,
       };
       draw();
@@ -357,21 +361,14 @@ export async function startTui(): Promise<void> {
       const result = await restartDaemon();
       debugLog("restart", "完成", { result });
       const label = result === "restarted" ? "已重启 daemon" : "已启动 daemon";
-      state = pushEvent(
-        finishSwitch(state, null),
-        "ok",
-        label,
-      );
-      // 先立刻重绘：结束「处理中」并让右下角结果马上可见，不依赖 refresh 是否被跳过。
+      state = pushEvent(finishSwitch(state, label), "ok", label);
+      // 先立刻重绘：结束「处理中」并让运行页反馈区的结果马上可见，不依赖 refresh 是否被跳过。
       draw();
       await refresh(label);
     } catch (err) {
       debugLog("restart", "失败", { err: (err as Error).message });
-      state = pushEvent(
-        finishSwitch(state, null),
-        "error",
-        `${state.status ? "重启" : "启动"} daemon 失败：\n${(err as Error).message}`,
-      );
+      const text = `${state.status ? "重启" : "启动"} daemon 失败：${(err as Error).message}`;
+      state = pushEvent(finishSwitch(state, text), "error", text);
       draw();
     }
   };
@@ -382,8 +379,9 @@ export async function startTui(): Promise<void> {
       draw();
       return;
     }
-    if (state.focus === "daemon") {
-      state = beginRestartConfirm(state);
+    if (state.focus === "panel") {
+      if (state.page === "runtime") state = beginRestartConfirm(state);
+      else if (state.page === "models") state = beginModeConfirm(state);
       draw();
       return;
     }
@@ -397,11 +395,7 @@ export async function startTui(): Promise<void> {
       }
       return;
     }
-    if (state.page === "routing") {
-      state = beginRoutingConfirm(state);
-    } else {
-      state = beginSwitchConfirm(state);
-    }
+    state = beginSwitchConfirm(state);
     draw();
   };
 
@@ -468,7 +462,7 @@ export async function startTui(): Promise<void> {
       }
       if (key.name === "return" || key.name === "enter") {
         if (state.confirming === "switch") void confirmSwitch();
-        else if (state.confirming === "routing") void confirmRouting();
+        else if (state.confirming === "mode") void confirmMode();
         else if (state.confirming === "restart") void confirmRestart();
         else if (state.confirming === "provider-action") void runProviderAction();
         else if (state.confirming === "remove-provider") void confirmRemoveProvider();
@@ -589,7 +583,7 @@ export async function startTui(): Promise<void> {
 
   /**
    * 挂起 TUI，运行现有 CLI 命令（复用其交互），等用户看完输出按键后恢复 TUI，
-   * 并把结果写进右下角反馈区。命令失败也必须恢复终端。
+   * 并把结果写进运行页反馈区。命令失败也必须恢复终端。
    */
   const runSuspended = async (label: string, fn: () => void | Promise<void>): Promise<void> => {
     suspend();
