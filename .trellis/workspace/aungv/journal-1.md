@@ -807,3 +807,39 @@ Follow-up to the stats feature, done outside a Trellis task at the user's reques
 
 - 待用户 npm login --registry=https://registry.npmjs.org 后执行 npm publish（1.2.0，名字未被占用）；如需换许可证只需改 package.json 的 license 字段 + LICENSE 文件
 - 教训：不要用 `| head` 截断会写 dist 的命令——npm publish/tsup（clean:true）先删 dist 再重建，被 SIGPIPE 打断后 dist 为空，pack 出来的 tarball 没有 dist、bin 链接也不会生成（本次已重建并复验）
+
+
+## Session 26: 最近10条改为每个上游目标各自取最近10条
+<!-- trellis-session: v=2 fp=dfc0f3cece615229 -->
+
+**Date**: 2026-10-18
+**Task**: 最近10条改为每个上游目标各自取最近10条
+**Branch**: `master`
+
+### Summary
+
+用户指出统计页「最近10条」口径不对：原先是全局环形缓冲里取最近 10 条，量大的目标会把小目标的记录挤掉。改为每个 target（provider+model+endpoint）各自维护最近 10 条，页面按目标分行展示。
+
+### Main Changes
+
+- src/stats/recent.ts：RecentBuffer 增加 perTargetEvents()，每个 target 保留自己的最近 10 条（升序），全局环形缓冲只作为兜底
+- src/stats/aggregate.ts：窗口聚合改用 per-target 口径，unrouted 单独保留最新 10 条本地失败，不进 targets / overall
+- spec/backend/usage-stats.md + 两个 README：写清「每目标 10 条」的口径
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5b03a95` | feat(stats): 最近10条改为每个上游目标各自取最近10条 |
+
+### Testing
+
+- [OK] [OK] npm run typecheck / npm test（新增 stats-aggregate、stats-store 用例：两个目标各 12 条 → 两行各 10 条；高流量目标不挤掉低流量目标）/ npm run build
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 无（已归档 10-18-stats-recent10-per-target）
