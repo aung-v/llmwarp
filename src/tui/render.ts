@@ -2,11 +2,15 @@ import { homedir } from "node:os";
 import pc from "picocolors";
 import type { TuiEvent, TuiPage, TuiState } from "./model.js";
 import {
+  FILTER_LABELS,
   PROVIDER_ACTIONS,
+  REASONING_CHOICES,
   SETTINGS_ROWS,
+  reasoningLabel,
   selectedEntry,
   selectedProvider,
   selectedSettingsRow,
+  selectedTargetSettings,
   statsWindowData,
 } from "./model.js";
 import type { AggregateMetrics } from "../stats/aggregate.js";
@@ -172,26 +176,76 @@ function modelRows(state: TuiState, height: number): string[] {
 
 function settingsRows(state: TuiState): string[] {
   const rows: string[] = [];
-  const focused = state.focus === "panel";
+  const focused = state.focus === "panel" && !state.switching;
   const current = selectedSettingsRow(state);
+  const settings = selectedTargetSettings(state);
 
-  const row = (selected: boolean, text: string): void => {
+  const row = (selected: boolean, body: string): void => {
+    const text = `${selected && focused ? "▸" : " "} ${body}`;
     if (state.switching) rows.push(pc.dim(text));
     else if (selected && focused) rows.push(pc.bgBlue(pc.white(text)));
-    else rows.push(selected ? text : pc.dim(text));
+    else rows.push(text);
   };
 
+  // 过滤四行。
   for (const item of SETTINGS_ROWS) {
-    const selected = item === current;
-    if (item !== "mode") continue;
-    // 光标只在设置块获得焦点时出现，避免列表和右栏同时有两个 ▸。
-    const marker = selected && focused ? "▸" : " ";
-    row(selected, `${marker} warp 模式  ${routingLabel(state.useClientModel)}  全局`);
-    // 旧「模式」页关于 warp 写法的说明搬到这里，始终可见，随面板宽度截断。
-    rows.push(pc.dim("  客户端 warp / 留空 → 当前模型"));
-    rows.push(pc.dim("  客户端 供应商/模型 → 指定模型"));
-    rows.push(pc.dim("  统一用当前模型 → 忽略 model"));
+    if (item === "reasoning" || item === "mode") continue;
+    const value = settings?.inputFilter[item] === true;
+    const overridden = settings?.overriddenKeys.includes(item) ?? false;
+    row(
+      item === current,
+      `${pad(`${FILTER_LABELS[item]}过滤`, 10)} ${value ? "开" : "关"}${overridden ? "  被端点级覆盖" : ""}`,
+    );
   }
+
+  row(
+    current === "reasoning",
+    `${pad("思考强度", 10)} ${reasoningLabel(settings?.reasoning ?? "passthrough")}`,
+  );
+
+  if (settings && settings.endpointOverrides.length > 0) {
+    rows.push("");
+    rows.push(pc.dim("端点级配置（只改模型级）："));
+    rows.push(pc.dim(`  ${settings.endpointOverrides.map(shortEndpoint).join(" / ")}`));
+  }
+
+  rows.push(pc.dim("  ────────────────────────"));
+  row(current === "mode", `warp 模式  ${routingLabel(state.useClientModel)}  全局`);
+  // 旧「模式」页关于 warp 写法的说明搬到这里，始终可见，随面板宽度截断。
+  rows.push(pc.dim("  客户端 warp / 留空 → 当前模型"));
+  rows.push(pc.dim("  客户端 供应商/模型 → 指定模型"));
+  rows.push(pc.dim("  统一用当前模型 → 忽略 model"));
+  return rows;
+}
+
+function reasoningPanelTitle(state: TuiState): string {
+  const settings = selectedTargetSettings(state);
+  const entry = selectedEntry(state);
+  const label = settings ? `${settings.provider}/${settings.model}` : entry?.label ?? "—";
+  return `思考强度  ${sanitize(label)}`;
+}
+
+/** 右栏值列表；矮终端围绕当前项截取，并明确写出隐藏条数。 */
+function reasoningValueRows(state: TuiState, height: number): string[] {
+  const total = REASONING_CHOICES.length;
+  const available = Math.max(height, 0);
+  const noteRows = available < total ? 1 : 0;
+  const visible = Math.max(available - noteRows, 0);
+  if (visible === 0) {
+    return noteRows > 0 ? [pc.dim(`… 另有 ${total} 项未显示`)] : [];
+  }
+
+  const start = Math.min(
+    Math.max(state.reasoningCursor - Math.floor(visible / 2), 0),
+    Math.max(total - visible, 0),
+  );
+  const rows = REASONING_CHOICES.slice(start, start + visible).map((choice, offset) => {
+    const selected = start + offset === state.reasoningCursor;
+    const text = `${selected ? "▸" : " "} ${choice.label}`;
+    return selected ? pc.bgBlue(pc.white(text)) : text;
+  });
+  const hidden = total - visible;
+  if (hidden > 0) rows.push(pc.dim(`… 另有 ${hidden} 项未显示`));
   return rows;
 }
 
@@ -687,6 +741,9 @@ function statsRows(state: TuiState, height: number, width: number): string[] {
 }
 
 function confirmationRows(state: TuiState): string[] {
+  // 思考强度是右栏的第二层列表，不占用整页确认框。
+  if (state.confirming === "reasoning-values") return [];
+
   if (state.confirming === "switch") {
     const selected = selectedEntry(state);
     return selected?.model
@@ -843,12 +900,21 @@ export function renderTui(
     const rightPanel =
       state.page === "providers"
         ? panel("守护进程", daemonInfoRows(state), rightWidth, Math.min(mainHeight, 9))
-        : panel("选中模型设置", settingsRows(state), rightWidth, mainHeight);
+        : state.confirming === "reasoning-values"
+          ? panel(
+              reasoningPanelTitle(state),
+              reasoningValueRows(state, Math.max(mainHeight - 2, 0)),
+              rightWidth,
+              mainHeight,
+            )
+          : panel("选中模型设置", settingsRows(state), rightWidth, mainHeight);
     body = sideBySide(listPanel, rightPanel);
   }
 
   const keyHint = state.switching
     ? "处理中… 请稍候（Ctrl-C 可退出）"
+    : state.confirming === "reasoning-values"
+      ? "↑↓ 选择 · Enter 应用 · Esc 返回"
     : state.page === "stats"
       ? "h 切换统计范围 · ←→ 切页面/左右栏 · r 刷新 · q 退出"
       : state.page === "runtime"

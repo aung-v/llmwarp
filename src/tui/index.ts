@@ -5,10 +5,16 @@ import {
   ensureConfigFile,
   getPort,
   loadConfig,
+  resolveInputFilter,
+  resolveReasoning,
+  setTargetInputFilter,
+  setTargetReasoning,
   setUseClientModel,
   updateActive,
   type Config,
   type DaemonInfo,
+  type InputFilterConfig,
+  type ReasoningSetting,
 } from "../config.js";
 import {
   adminRequest,
@@ -21,6 +27,7 @@ import { debugLog, resetDebugLog } from "../debuglog.js";
 import {
   beginProviderAction,
   beginProviderEdit,
+  beginReasoningValues,
   beginRemoveProvider,
   beginRemoveProviderConfirm,
   beginModeConfirm,
@@ -30,6 +37,8 @@ import {
   beginSwitch,
   beginSwitchConfirm,
   buildCatalog,
+  buildTargets,
+  backToModelSettings,
   cancelConfirm,
   createTuiState,
   focusNext,
@@ -37,19 +46,29 @@ import {
   finishSuspended,
   finishSwitch,
   moveProviderAction,
+  moveReasoningValue,
   moveSelection,
   parseStatusSnapshot,
   pushEvent,
+  restoreReasoningView,
   restoreStatsView,
+  FILTER_KEYS,
+  FILTER_LABELS,
   SETTINGS_ROWS,
   selectedEntry,
   selectedProvider,
   selectedProviderAction,
+  selectedReasoningChoice,
+  selectedSettingsRow,
+  selectedTargetSettings,
+  targetKey,
   targetModeValue,
+  toggleFilterValue,
   toggleStatsWindow,
   type CatalogItem,
   type ProviderSummary,
   type StatusSnapshot,
+  type TargetSettings,
   type TuiState,
 } from "./model.js";
 import { frameToAnsi, renderTui } from "./render.js";
@@ -62,20 +81,27 @@ const LEAVE_ALTERNATE_SCREEN = "\u001B[?1049l";
 
 async function readCatalog(
   status: StatusSnapshot | null,
-): Promise<{ entries: CatalogItem[]; useClientModel: boolean; providers: ProviderSummary[] }> {
+): Promise<{
+  entries: CatalogItem[];
+  useClientModel: boolean;
+  providers: ProviderSummary[];
+  targets: Record<string, TargetSettings>;
+}> {
   try {
     const config = loadConfig();
+    const entries = buildCatalog(config, status);
     return {
-      entries: buildCatalog(config, status),
+      entries,
       useClientModel: config.useClientModel ?? true,
       providers: Object.entries(config.providers).map(([name, provider]) => ({
         name,
         baseUrl: provider.baseUrl,
         models: (provider.models ?? []).length,
       })),
+      targets: buildTargets(config, entries),
     };
   } catch {
-    return { entries: [], useClientModel: true, providers: [] };
+    return { entries: [], useClientModel: true, providers: [], targets: {} };
   }
 }
 
@@ -95,6 +121,30 @@ export async function applyActiveSelection(provider: string, model: string): Pro
  */
 export async function applyRoutingMode(useClientModel: boolean): Promise<void> {
   setUseClientModel(useClientModel);
+  await adminRequest("POST", "reload");
+}
+
+/**
+ * 写模型级思考强度再 reload：先落盘保证失败时配置仍可恢复，reload 错误交给调用方展示。
+ */
+export async function applyTargetReasoning(
+  provider: string,
+  model: string,
+  value: ReasoningSetting,
+): Promise<void> {
+  setTargetReasoning(provider, model, value);
+  await adminRequest("POST", "reload");
+}
+
+/**
+ * 写模型级输入过滤再 reload：四项整体落盘，reload 错误交给调用方展示。
+ */
+export async function applyTargetInputFilter(
+  provider: string,
+  model: string,
+  filter: Required<InputFilterConfig>,
+): Promise<void> {
+  setTargetInputFilter(provider, model, filter);
   await adminRequest("POST", "reload");
 }
 
@@ -210,7 +260,7 @@ export async function startTui(): Promise<void> {
       const running = daemonRunning();
       debugLog("refresh", "daemonRunning", running ? { pid: running.pid, port: running.port } : { running: false });
       const status = running ? parseStatusSnapshot(await adminRequest("GET", "status")) : null;
-      const { entries, useClientModel, providers } = await readCatalog(status);
+      const { entries, useClientModel, providers, targets } = await readCatalog(status);
       if (state !== base) {
         debugLog("refresh", "放弃写回：等待期间状态已被用户动作替换");
         return;
@@ -232,7 +282,7 @@ export async function startTui(): Promise<void> {
       // 确认态携带的供应商身份：刷新后按名字重定位，供应商消失则关闭菜单 / 取消确认。
       const previousProviderName = selectedProvider(base)?.name ?? null;
       const previousEvents = base.events;
-      state = createTuiState(entries, status, useClientModel, providers);
+      state = createTuiState(entries, status, useClientModel, providers, targets);
       // 运行页反馈区的内容不能被自动刷新清掉。
       state.events = previousEvents;
       if (previousSelected >= 0) state.selected = previousSelected;
@@ -273,6 +323,7 @@ export async function startTui(): Promise<void> {
           state.confirming = null;
         }
       }
+      state = restoreReasoningView(base, state);
       state.message = message;
       debugLog("refresh", "end", { running: Boolean(running) });
     } catch (err) {
@@ -373,6 +424,132 @@ export async function startTui(): Promise<void> {
     }
   };
 
+  /** 模型页设置块的过滤行：写四项 → reload → 反馈 + 页脚。 */
+  const toggleSelectedFilter = async (): Promise<void> => {
+    const key = selectedSettingsRow(state);
+    if (key === "reasoning") {
+      state = beginReasoningValues(state);
+      draw();
+      return;
+    }
+    if (key === "mode") {
+      state = beginModeConfirm(state);
+      draw();
+      return;
+    }
+
+    const entry = selectedEntry(state);
+    const settings = selectedTargetSettings(state);
+    if (!entry?.model || !settings) return;
+
+    const next = toggleFilterValue(settings, key);
+    const label = `${FILTER_LABELS[key]}过滤已${next[key] ? "开" : "关"} · ${settings.provider}/${settings.model}`;
+
+    // 写入 + reload 期间锁住按键，避免连续 Enter 造成并发写。
+    state = { ...state, switching: true, message: "写入中…" };
+    draw();
+    try {
+      await applyTargetInputFilter(settings.provider, settings.model, next);
+    } catch (err) {
+      // 写入可能已经落盘但 reload 失败：按配置回读，区分「未修改」与「已写入、reload 失败」。
+      let saved = false;
+      try {
+        const config = loadConfig();
+        const provider = config.providers[settings.provider];
+        const resolved = provider ? resolveInputFilter(provider, settings.model, "") : undefined;
+        saved = FILTER_KEYS.every((item) => (resolved?.[item] === true) === next[item]);
+        state = { ...state, targets: buildTargets(config, state.entries) };
+      } catch {
+        // 配置读不回时保留旧设置块，下面按写盘失败处理。
+      }
+      const text = saved
+        ? `${label}（配置已写入，reload 失败：${(err as Error).message}）`
+        : `${FILTER_LABELS[key]}过滤未修改：${(err as Error).message}`;
+      state = pushEvent(finishSwitch(state, text), saved ? "info" : "error", text);
+      draw();
+      return;
+    }
+
+    // 写盘成功：按配置回读，顺便刷新端点级覆盖提示；读不回时用刚写入的值兜底。
+    try {
+      const config = loadConfig();
+      state = { ...state, targets: buildTargets(config, state.entries) };
+    } catch {
+      state = {
+        ...state,
+        targets: {
+          ...state.targets,
+          [targetKey(settings.provider, settings.model)]: {
+            ...settings,
+            inputFilter: next,
+            overriddenKeys: [],
+          },
+        },
+      };
+    }
+    state = pushEvent(finishSwitch(state, label), "ok", label);
+    draw();
+  };
+
+  /** 思考强度值列表 Enter：写模型级 reasoning → reload → 反馈 + 重算设置块。 */
+  const confirmReasoning = async (): Promise<void> => {
+    const choice = selectedReasoningChoice(state);
+    const settings = selectedTargetSettings(state);
+    if (!settings) return;
+
+    const label =
+      choice.value === "passthrough"
+        ? `思考强度已设为 不修改（该模型不再继承供应商层） · ${settings.provider}/${settings.model}`
+        : `思考强度已设为 ${choice.label} · ${settings.provider}/${settings.model}`;
+
+    state = { ...state, confirming: null, switching: true, message: "写入中…" };
+    draw();
+    try {
+      await applyTargetReasoning(settings.provider, settings.model, choice.value);
+    } catch (err) {
+      // 写入可能已经落盘但 reload 失败：按配置回读，区分「未修改」与「已写入、reload 失败」。
+      let saved = false;
+      try {
+        const config = loadConfig();
+        const provider = config.providers[settings.provider];
+        saved = provider
+          ? resolveReasoning(provider, settings.model, "") === choice.value
+          : false;
+        state = { ...state, targets: buildTargets(config, state.entries) };
+      } catch {
+        // 配置读不回时保留旧设置块，下面按写盘失败处理。
+      }
+      if (saved) {
+        const text = `${label}（配置已写入，reload 失败：${(err as Error).message}）`;
+        state = pushEvent(finishSwitch(state, text), "info", text);
+      } else {
+        const text = `思考强度未修改：${(err as Error).message}`;
+        state = pushEvent(finishSwitch(state, text), "error", text);
+      }
+      draw();
+      return;
+    }
+
+    // 写盘成功：按配置回读，顺便刷新端点级提示；读不回时用刚写入的值兜底。
+    try {
+      const config = loadConfig();
+      state = { ...state, targets: buildTargets(config, state.entries) };
+    } catch {
+      state = {
+        ...state,
+        targets: {
+          ...state.targets,
+          [targetKey(settings.provider, settings.model)]: {
+            ...settings,
+            reasoning: choice.value,
+          },
+        },
+      };
+    }
+    state = pushEvent(finishSwitch(state, label), "ok", label);
+    draw();
+  };
+
   const handleEnter = (): void => {
     if (state.focus === "nav") {
       state = { ...state, focus: "list" };
@@ -380,9 +557,12 @@ export async function startTui(): Promise<void> {
       return;
     }
     if (state.focus === "panel") {
-      if (state.page === "runtime") state = beginRestartConfirm(state);
-      else if (state.page === "models") state = beginModeConfirm(state);
-      draw();
+      if (state.page === "runtime") {
+        state = beginRestartConfirm(state);
+        draw();
+      } else if (state.page === "models") {
+        void toggleSelectedFilter();
+      }
       return;
     }
     if (state.page === "providers") {
@@ -453,8 +633,13 @@ export async function startTui(): Promise<void> {
     if (state.switching) return;
 
     // 确认态：只认 Enter 确认 / Esc 取消，其余按键（含 q/r）一律忽略。
-    // 「供应商操作」菜单额外接受 ↑/↓ 在两个选项间移动。
+    // 「思考强度」值列表与「供应商操作」菜单额外接受 ↑/↓ 移动。
     if (state.confirming) {
+      if (state.confirming === "reasoning-values" && (key.name === "down" || key.name === "up")) {
+        state = moveReasoningValue(state, key.name === "down" ? 1 : -1);
+        draw();
+        return;
+      }
       if (state.confirming === "provider-action" && (key.name === "down" || key.name === "up")) {
         state = moveProviderAction(state, key.name === "down" ? 1 : -1);
         draw();
@@ -462,12 +647,16 @@ export async function startTui(): Promise<void> {
       }
       if (key.name === "return" || key.name === "enter") {
         if (state.confirming === "switch") void confirmSwitch();
+        else if (state.confirming === "reasoning-values") void confirmReasoning();
         else if (state.confirming === "mode") void confirmMode();
         else if (state.confirming === "restart") void confirmRestart();
         else if (state.confirming === "provider-action") void runProviderAction();
         else if (state.confirming === "remove-provider") void confirmRemoveProvider();
       } else if (key.name === "escape") {
-        state = cancelConfirm(state);
+        state =
+          state.confirming === "reasoning-values"
+            ? backToModelSettings(state)
+            : cancelConfirm(state);
         draw();
       }
       return;

@@ -173,14 +173,15 @@ Some upstreams want an explicit thinking level; others reject or ignore the one 
     "targets": {
       "doubao-seed-1-6": {
         "reasoning": "high",                 // this model always asks for high
-        "endpoints": { "/responses": { "reasoning": "off" } }  // …except here, thinking is off
+        "endpoints": { "/responses": { "reasoning": "none" } }  // …except here, thinking is disabled
       }
     }
   }
 }
 ```
 
-- Values: `passthrough` (default — the body is not even parsed), `off` (writes `none`), or one of `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` / `ultra`.
+- Values: `passthrough` (default — the body is not even parsed), or one of `none` (thinking disabled) / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` / `ultra`.
+- In the TUI, move to the `思考强度` row in the 模型 page's `选中模型设置` block and press `Enter`. The right column becomes a 9-item list (`不修改` / `关闭` / 7 levels); `↑↓` moves, `Enter` writes `providers.<p>.targets.<m>.reasoning` and reloads the daemon, and `Esc` returns. `关闭` is only the label — the config value is `none`.
 - Layering matches the input filter: endpoint > model > provider, first layer that sets `reasoning` wins as a whole.
 - `/chat/completions` gets top-level `reasoning_effort`; `/responses` gets `reasoning.effort`. The equivalent field is deleted on the way, so a request never carries two conflicting values; every other path is untouched.
 - llmwarp does not probe what the upstream supports and never substitutes a value: an upstream error is passed through as-is.

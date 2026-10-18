@@ -7,3 +7,4 @@
 {"file": ".trellis/spec/frontend/interaction-guidelines.md", "reason": "TUI 请求活动行的展示约定"}
 {"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "config → proxy → stats → TUI 的跨层数据流检查"}
 {"file": "CONTEXT.md", "reason": "target / media part / input filter / filter note 术语"}
+{"file": ".trellis/spec/backend/model-routing.md", "reason": "target（provider+model+endpoint）解析与 endpoint 归一化语义"}

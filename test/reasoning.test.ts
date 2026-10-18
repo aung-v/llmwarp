@@ -28,11 +28,11 @@ test("passthrough 不解析 body，原样返回同一 Buffer", () => {
 test("chat：写入顶层 reasoning_effort 并删掉 reasoning.effort", () => {
   const { body, applied, requested } = run(
     { model: "m", reasoning: { effort: "medium", summary: "auto" }, reasoning_effort: "low" },
-    "high",
+    "max",
   );
-  assert.equal(applied, "high");
+  assert.equal(applied, "max");
   assert.equal(requested, "low");
-  assert.equal(body.reasoning_effort, "high");
+  assert.equal(body.reasoning_effort, "max");
   assert.deepEqual(body.reasoning, { summary: "auto" });
 });
 
@@ -69,12 +69,12 @@ test("responses：客户端没带时注入 reasoning.effort", () => {
 });
 
 test("关闭写 none：覆盖客户端已传的值", () => {
-  const chat = run({ reasoning_effort: "medium" }, "off");
+  const chat = run({ reasoning_effort: "medium" }, "none");
   assert.equal(chat.body.reasoning_effort, "none");
   assert.equal(chat.requested, "medium");
   assert.equal(chat.applied, "none");
 
-  const responses = run({ reasoning: { effort: "high" } }, "off", "/v1/responses");
+  const responses = run({ reasoning: { effort: "high" } }, "none", "/v1/responses");
   assert.deepEqual(responses.body.reasoning, { effort: "none" });
   assert.equal(responses.applied, "none");
 });

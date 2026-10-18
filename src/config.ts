@@ -21,12 +21,11 @@ export interface InputFilterConfig {
 }
 
 /**
- * 思考强度设置：`passthrough` 原样不动；`off` 写 `none`；其余是直接写进请求的等级。
+ * 思考强度设置：`passthrough` 原样不动；其余值直接写进请求，`none` 表示关闭。
  * 顺序即文档与报错里的枚举顺序。
  */
 export const REASONING_SETTINGS = [
   "passthrough",
-  "off",
   "none",
   "minimal",
   "low",
@@ -257,6 +256,13 @@ export function normalizeInputFilter(raw: unknown, path: string): InputFilterCon
     throw new Error(`配置项 ${path} 必须是对象`);
   }
   const source = raw as Record<string, unknown>;
+  for (const key of Object.keys(source)) {
+    if (!(INPUT_FILTER_KEYS as readonly string[]).includes(key)) {
+      throw new Error(
+        `配置项 ${path}.${key} 不是已知的过滤开关（${INPUT_FILTER_KEYS.join(" / ")}）`,
+      );
+    }
+  }
   const filter: InputFilterConfig = {};
   let defined = false;
   for (const key of INPUT_FILTER_KEYS) {
@@ -548,6 +554,45 @@ export function setUseClientModel(useClientModel: boolean): void {
   const next = applyEdits(
     text,
     modify(text, ["useClientModel"], useClientModel, { formattingOptions: FORMAT }),
+  );
+  writeConfigText(next);
+}
+
+/**
+ * 写模型级输入过滤：`providers.<name>.targets.<model>.inputFilter`。
+ * 传入的四项会整体写入（过滤按层生效，缺键等于 false，半份配置会静默关掉其他类型）。
+ * `filter` 传 undefined 时删掉该模型的整层配置，回落到供应商层。
+ */
+export function setTargetInputFilter(
+  name: string,
+  model: string,
+  filter: InputFilterConfig | undefined,
+): void {
+  const text = readConfigText();
+  const next = applyEdits(
+    text,
+    modify(text, ["providers", name, "targets", model, "inputFilter"], filter, {
+      formattingOptions: FORMAT,
+    }),
+  );
+  writeConfigText(next);
+}
+
+/**
+ * 写模型级思考强度：`providers.<name>.targets.<model>.reasoning`。
+ * `value` 传 undefined 时删掉该模型的 reasoning 层，回落到供应商层。
+ */
+export function setTargetReasoning(
+  name: string,
+  model: string,
+  value: ReasoningSetting | undefined,
+): void {
+  const text = readConfigText();
+  const next = applyEdits(
+    text,
+    modify(text, ["providers", name, "targets", model, "reasoning"], value, {
+      formattingOptions: FORMAT,
+    }),
   );
   writeConfigText(next);
 }

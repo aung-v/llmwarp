@@ -20,19 +20,28 @@ const {
   clearDaemonInfoFor,
   ensureConfigFile,
   loadConfig,
+  setTargetInputFilter,
+  setTargetReasoning,
   writeDaemonInfo,
 } = await import("../src/config.js");
 const { adminRequest, stopDaemon } = await import("../src/daemon.js");
 const { startServer } = await import("../src/server.js");
-const { applyActiveSelection, applyRoutingMode, restartDaemon } = await import("../src/tui/index.js");
-const { beginModeConfirm, cancelConfirm, createTuiState, focusNext } =
+const {
+  applyActiveSelection,
+  applyRoutingMode,
+  applyTargetInputFilter,
+  applyTargetReasoning,
+  restartDaemon,
+} =
+  await import("../src/tui/index.js");
+const { beginModeConfirm, cancelConfirm, createTuiState, focusNext, SETTINGS_ROWS } =
   await import("../src/tui/model.js");
 
 const socketSkip = await skipWithoutSockets();
 
-/** 模型页把焦点落到右栏设置块（warp 模式所在行）。 */
+/** 模型页把焦点落到右栏设置块的 warp 模式行。 */
 function focusSettings(state: ReturnType<typeof createTuiState>): ReturnType<typeof createTuiState> {
-  return focusNext(state);
+  return { ...focusNext(state), settingsCursor: SETTINGS_ROWS.length - 1 };
 }
 
 const COMMENTED_CONFIG = `{
@@ -176,6 +185,292 @@ test("warp 模式确认取消：不写配置、不启动 daemon", () => {
 
   assert.equal(readFileSync(CONFIG_PATH, "utf8"), before);
   assert.equal(existsSync(DAEMON_PATH), false);
+});
+
+const TARGET_CONFIG = `{
+  // 保留这条注释
+  "port": 8787,
+  "providers": {
+    "ark": {
+      "baseUrl": "http://127.0.0.1:1/v1",
+      "apiKey": "k",
+      "models": ["glm"],
+      "targets": {
+        "glm": {
+          // 模型级注释
+          "endpoints": { "/v1/chat/completions": { "inputFilter": { "image": false } } }
+        }
+      }
+    }
+  }
+}
+`;
+
+test("setTargetInputFilter 四项整体写入，保留注释与端点级配置", () => {
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  writeFileSync(CONFIG_PATH, TARGET_CONFIG);
+  const filter = { image: true, audio: false, file: true, video: false };
+
+  setTargetInputFilter("ark", "glm", filter);
+
+  const after = readFileSync(CONFIG_PATH, "utf8");
+  assert.match(after, /保留这条注释/);
+  assert.match(after, /模型级注释/);
+  // 端点级配置的值一个都不改。
+  assert.match(after, /"\/v1\/chat\/completions"/);
+  assert.match(after, /"inputFilter": \{\s*"image": false\s*\}/);
+  assert.deepEqual(loadConfig().providers.ark.targets?.glm?.inputFilter, filter);
+  assert.deepEqual(loadConfig().providers.ark.targets?.glm?.endpoints, {
+    "/v1/chat/completions": { inputFilter: { image: false } },
+  });
+});
+
+test("setTargetInputFilter 在模型没有 targets 分支时新建，不影响其他键", () => {
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  writeFileSync(CONFIG_PATH, COMMENTED_CONFIG);
+  setTargetInputFilter("ark", "glm-2", { image: false, audio: true, file: false, video: false });
+
+  const after = readFileSync(CONFIG_PATH, "utf8");
+  assert.match(after, /保留这条注释/);
+  assert.match(after, /行内注释/);
+  assert.match(after, /"glm-2"/);
+  assert.deepEqual(loadConfig().providers.ark.targets?.["glm-2"]?.inputFilter, {
+    image: false,
+    audio: true,
+    file: false,
+    video: false,
+  });
+  assert.deepEqual(loadConfig().providers.ark.models, ["glm", "glm-2"]);
+});
+
+test("setTargetReasoning 写模型级值，保留注释、端点级配置与其他键", () => {
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  writeFileSync(CONFIG_PATH, TARGET_CONFIG);
+
+  setTargetReasoning("ark", "glm", "high");
+
+  const after = readFileSync(CONFIG_PATH, "utf8");
+  assert.match(after, /保留这条注释/);
+  assert.match(after, /模型级注释/);
+  assert.match(after, /"reasoning": "high"/);
+  assert.match(after, /"\/v1\/chat\/completions"/);
+  assert.match(after, /"inputFilter": \{\s*"image": false\s*\}/);
+  assert.equal(loadConfig().providers.ark.targets?.glm?.reasoning, "high");
+  assert.deepEqual(loadConfig().providers.ark.targets?.glm?.endpoints, {
+    "/v1/chat/completions": { inputFilter: { image: false } },
+  });
+});
+
+test("setTargetReasoning 在模型没有 targets 分支时新建，undefined 删除该层", () => {
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  writeFileSync(CONFIG_PATH, COMMENTED_CONFIG);
+
+  setTargetReasoning("ark", "glm-2", "passthrough");
+  assert.equal(loadConfig().providers.ark.targets?.["glm-2"]?.reasoning, "passthrough");
+
+  setTargetReasoning("ark", "glm-2", "none");
+  assert.equal(loadConfig().providers.ark.targets?.["glm-2"]?.reasoning, "none");
+  assert.match(readFileSync(CONFIG_PATH, "utf8"), /行内注释/);
+
+  setTargetReasoning("ark", "glm-2", undefined);
+  assert.equal(loadConfig().providers.ark.targets?.["glm-2"]?.reasoning, undefined);
+  assert.deepEqual(loadConfig().providers.ark.models, ["glm", "glm-2"]);
+});
+
+test("daemon 未运行时 applyTargetReasoning 仍落盘并保留注释", async () => {
+  clearDaemonInfo();
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  writeFileSync(CONFIG_PATH, TARGET_CONFIG);
+
+  await assert.rejects(() => applyTargetReasoning("ark", "glm", "none"), /守护进程未运行/);
+
+  assert.equal(loadConfig().providers.ark.targets?.glm?.reasoning, "none");
+  assert.match(readFileSync(CONFIG_PATH, "utf8"), /模型级注释/);
+  assert.equal(existsSync(DAEMON_PATH), false);
+});
+
+test("applyTargetReasoning 写盘失败时不创建 daemon", async () => {
+  clearDaemonInfo();
+  rmSync(CONFIG_PATH, { force: true });
+
+  await assert.rejects(() => applyTargetReasoning("ark", "glm", "high"), /配置文件不存在/);
+
+  assert.equal(existsSync(CONFIG_PATH), false);
+  assert.equal(existsSync(DAEMON_PATH), false);
+});
+
+test("daemon 未运行时 applyTargetInputFilter 仍四项落盘并保留注释", async () => {
+  clearDaemonInfo();
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  writeFileSync(CONFIG_PATH, TARGET_CONFIG);
+  const filter = { image: true, audio: false, file: true, video: false };
+
+  await assert.rejects(
+    () => applyTargetInputFilter("ark", "glm", filter),
+    /守护进程未运行/,
+  );
+
+  assert.deepEqual(loadConfig().providers.ark.targets?.glm?.inputFilter, filter);
+  assert.match(readFileSync(CONFIG_PATH, "utf8"), /模型级注释/);
+  assert.equal(existsSync(DAEMON_PATH), false);
+});
+
+test("applyTargetInputFilter 写盘失败时不创建 daemon", async () => {
+  clearDaemonInfo();
+  rmSync(CONFIG_PATH, { force: true });
+
+  await assert.rejects(
+    () => applyTargetInputFilter("ark", "glm", { image: true, audio: false, file: false, video: false }),
+    /配置文件不存在/,
+  );
+
+  assert.equal(existsSync(CONFIG_PATH), false);
+  assert.equal(existsSync(DAEMON_PATH), false);
+});
+
+test("applyTargetInputFilter reload 失败：配置写入保留、错误可见", { skip: socketSkip }, async () => {
+  clearDaemonInfo();
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  writeFileSync(CONFIG_PATH, TARGET_CONFIG);
+
+  let reloadCalls = 0;
+  const fake = http.createServer((_req, res) => {
+    reloadCalls += 1;
+    res.writeHead(400, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: { message: "reload 失败：配置语法错误" } }));
+  });
+  await new Promise<void>((r) => fake.listen(0, "127.0.0.1", () => r()));
+  const fakePort = (fake.address() as { port: number }).port;
+  writeDaemonInfo({
+    pid: process.pid,
+    port: fakePort,
+    token: "test-token",
+    startedAt: new Date().toISOString(),
+    version: "test",
+  });
+
+  try {
+    const filter = { image: true, audio: false, file: true, video: false };
+    await assert.rejects(
+      () => applyTargetInputFilter("ark", "glm", filter),
+      /reload 失败/,
+    );
+    assert.deepEqual(loadConfig().providers.ark.targets?.glm?.inputFilter, filter);
+    assert.match(readFileSync(CONFIG_PATH, "utf8"), /模型级注释/);
+    assert.equal(reloadCalls, 1);
+  } finally {
+    clearDaemonInfo();
+    await new Promise<void>((r) => fake.close(() => r()));
+  }
+});
+
+test("applyTargetInputFilter 写盘后 reload，下一次请求按新值过滤", { skip: socketSkip }, async () => {
+  const upstream = await startUpstream();
+  const port = await freePort();
+  writeUpstreamConfig(port, upstream.port, upstream.port, true);
+  const server = await startServer({ port });
+  try {
+    await applyTargetInputFilter("alpha", "alpha-chat", {
+      image: true,
+      audio: false,
+      file: false,
+      video: false,
+    });
+
+    const res = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "alpha/alpha-chat",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "hi" },
+              { type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } },
+            ],
+          },
+        ],
+      }),
+    });
+    assert.equal(res.status, 200);
+    await res.json();
+
+    assert.equal(upstream.requests.length, 1);
+    const forwarded = JSON.parse(upstream.requests[0].body) as {
+      messages: { content: string }[];
+    };
+    assert.equal(forwarded.messages[0].content, "hi\n[llmwarp: removed 1 image]");
+  } finally {
+    await server.close();
+    await upstream.close();
+  }
+});
+
+test("applyTargetReasoning reload 失败：配置写入保留、错误可见", { skip: socketSkip }, async () => {
+  clearDaemonInfo();
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  writeFileSync(CONFIG_PATH, TARGET_CONFIG);
+
+  let reloadCalls = 0;
+  const fake = http.createServer((_req, res) => {
+    reloadCalls += 1;
+    res.writeHead(400, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: { message: "reload 失败：配置语法错误" } }));
+  });
+  await new Promise<void>((r) => fake.listen(0, "127.0.0.1", () => r()));
+  const fakePort = (fake.address() as { port: number }).port;
+  writeDaemonInfo({
+    pid: process.pid,
+    port: fakePort,
+    token: "test-token",
+    startedAt: new Date().toISOString(),
+    version: "test",
+  });
+
+  try {
+    await assert.rejects(() => applyTargetReasoning("ark", "glm", "high"), /reload 失败/);
+    assert.equal(loadConfig().providers.ark.targets?.glm?.reasoning, "high");
+    assert.match(readFileSync(CONFIG_PATH, "utf8"), /模型级注释/);
+    assert.equal(reloadCalls, 1);
+  } finally {
+    clearDaemonInfo();
+    await new Promise<void>((r) => fake.close(() => r()));
+  }
+});
+
+test("applyTargetReasoning 写盘后 reload，下一次请求按新值改写", { skip: socketSkip }, async () => {
+  const upstream = await startUpstream();
+  const port = await freePort();
+  writeUpstreamConfig(port, upstream.port, upstream.port, true);
+  const server = await startServer({ port });
+  try {
+    await applyTargetReasoning("alpha", "alpha-chat", "high");
+
+    const res = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "alpha/alpha-chat",
+        messages: [],
+        reasoning_effort: "low",
+        reasoning: { effort: "medium" },
+      }),
+    });
+    assert.equal(res.status, 200);
+    await res.json();
+
+    assert.equal(upstream.requests.length, 1);
+    const forwarded = JSON.parse(upstream.requests[0].body) as {
+      reasoning_effort?: string;
+      reasoning?: unknown;
+    };
+    assert.equal(forwarded.reasoning_effort, "high");
+    assert.equal(forwarded.reasoning, undefined, "chat 会删掉等价的 reasoning.effort");
+  } finally {
+    await server.close();
+    await upstream.close();
+  }
 });
 
 test("daemon 未运行时切换 warp 模式仍落盘且保留注释", async () => {

@@ -859,7 +859,7 @@ Follow-up to the stats feature, done outside a Trellis task at the user's reques
 ### Main Changes
 
 - 输入过滤：src/inputfilter.ts 纯函数只删白名单内的媒体 part，在该 content 数组首个被删位置留一句 [llmwarp: removed 2 images, 1 file]；Chat 只剩文本时压成字符串，Responses 按位置用 input_text / output_text；multipart、computer_call_output 截图、code_interpreter_call.outputs 原样透传
-- 思考强度：src/reasoning.ts 写 /chat/completions 的顶层 reasoning_effort 或 /responses 的 reasoning.effort，并删掉另一个等价字段；off 写 none，passthrough 不解析 body
+- 思考强度：src/reasoning.ts 写 /chat/completions 的顶层 reasoning_effort 或 /responses 的 reasoning.effort，并删掉另一个等价字段；none 直接写入表示关闭，passthrough 不解析 body
 - 配置：src/config.ts 三层 provider > model > endpoint（谁先定义谁生效、整层不合并），新增 EndpointConfig / REASONING_SETTINGS / normalizeReasoning / resolveReasoning；非法值报错带字段路径
 - 观测：RequestEvent / RequestActivity 增加可选 inputFilter 与 reasoning，TUI 活动行显示 img×2 aud×1 与 rsn medium→high；全 0 / 未改写时省略字段，旧 JSONL 行照常解析
 - 文档：两个 README 增加「Input filter」「Reasoning effort」小节；CONTEXT.md 记录 target / 媒体 part / 输入过滤 / 思考强度术语

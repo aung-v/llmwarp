@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/frontend/interaction-guidelines.md", "reason": "TUI 面板两层结构与键位约定"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "质量门与测试习惯"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "写盘 / reload 失败时的错误呈现"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "config → 面板 → 转发的跨层检查"}

@@ -5,6 +5,7 @@ import {
   beginRestartConfirm,
   beginProviderAction,
   beginProviderEdit,
+  beginReasoningValues,
   beginRemoveProvider,
   beginRemoveProviderConfirm,
   beginModeConfirm,
@@ -12,6 +13,9 @@ import {
   beginSwitch,
   beginSwitchConfirm,
   buildCatalog,
+  buildTargetSettings,
+  buildTargets,
+  backToModelSettings,
   cancelConfirm,
   createTuiState,
   finishSwitch,
@@ -19,16 +23,25 @@ import {
   focusNext,
   focusPrev,
   moveProviderAction,
+  moveReasoningValue,
   moveSelection,
   parseStatusSnapshot,
   pushEvent,
+  restoreReasoningView,
   restoreStatsView,
   selectedSettingsRow,
+  selectedTargetSettings,
   selectedProvider,
   selectedProviderAction,
+  selectedReasoningChoice,
   statsWindowData,
   toggleStatsWindow,
+  toggleFilterValue,
+  FILTER_KEYS,
+  REASONING_CHOICES,
+  SETTINGS_ROWS,
   TUI_PAGES,
+  targetKey,
   type SettingsRow,
   type StatusSnapshot,
   type ProviderSummary,
@@ -64,6 +77,11 @@ const config: Config = {
 /** 模型页把焦点落到右栏设置块。 */
 function focusSettings(state: TuiState): TuiState {
   return focusNext(state);
+}
+
+/** 设置块里把光标移到最后的 warp 模式行。 */
+function focusModeRow(state: TuiState): TuiState {
+  return { ...focusSettings(state), settingsCursor: SETTINGS_ROWS.length - 1 };
 }
 
 /** 按导航顺序切到指定页并把焦点落回列表；不依赖页数，新增页面也不会失效。 */
@@ -196,12 +214,18 @@ test("设置块 ↑↓ 切换选择且不越界", () => {
   let state = focusSettings(createTuiState(buildCatalog(config), status, true));
   assert.equal(state.focus, "panel");
   assert.equal(state.settingsCursor, 0);
-  assert.equal(selectedSettingsRow(state), "mode");
+  assert.equal(selectedSettingsRow(state), "image");
 
   state = moveSelection(state, 1);
-  assert.equal(state.settingsCursor, 0, "只有一行时不该越界");
+  assert.equal(selectedSettingsRow(state), "audio");
   state = moveSelection(state, -1);
-  assert.equal(state.settingsCursor, 0);
+  assert.equal(selectedSettingsRow(state), "image");
+  state = moveSelection(state, -1);
+  assert.equal(state.settingsCursor, 0, "第一行不该越界");
+
+  state = moveSelection(state, SETTINGS_ROWS.length + 5);
+  assert.equal(state.settingsCursor, SETTINGS_ROWS.length - 1, "最后一行不该越界");
+  assert.equal(selectedSettingsRow(state), "mode");
 });
 
 test("只有确认后才会进入切换状态", () => {
@@ -518,7 +542,7 @@ test("离线时设置块同样展示 warp 模式", () => {
 });
 
 test("设置块 Enter 进入 warp 模式确认态，Esc 取消且不影响 switch 确认", () => {
-  let state = focusSettings(createTuiState(buildCatalog(config), status, true));
+  let state = focusModeRow(createTuiState(buildCatalog(config), status, true));
 
   state = beginModeConfirm(state);
   assert.equal(state.confirming, "mode");
@@ -541,7 +565,7 @@ test("列表焦点 / 其他页不会误入 warp 模式确认", () => {
   assert.equal(beginModeSwitch(state), null);
 
   state = cancelConfirm(state);
-  const settings = focusSettings(state);
+  const settings = focusModeRow(state);
   state = beginModeConfirm(settings);
   assert.equal(state.confirming, "mode");
   assert.equal(beginModeConfirm(state).confirming, "mode");
@@ -580,7 +604,7 @@ test("重启确认只能从运行页的重启按钮进入", () => {
 test("warp 模式确认态文案说明后果", () => {
   const entries = buildCatalog(config);
   const toConfirm = (useClientModel: boolean) =>
-    beginModeConfirm(focusSettings(createTuiState(entries, status, useClientModel)));
+    beginModeConfirm(focusModeRow(createTuiState(entries, status, useClientModel)));
   const toUnified = renderTui(toConfirm(true), { height: 24, width: 80 });
   const toClient = renderTui(toConfirm(false), { height: 24, width: 80 });
 
@@ -605,6 +629,247 @@ test("模型页页脚提示基础按键，且统一「选择 / 切换 / Esc 返�
     width: 80,
   });
   assert.match(settings, /↑↓ 选择 · Enter 修改/);
+});
+
+const filterConfig: Config = {
+  ...config,
+  providers: {
+    ...config.providers,
+    ark: {
+      ...config.providers.ark,
+      inputFilter: { file: true },
+      targets: {
+        "glm-5.3-flash": {
+          inputFilter: { image: true },
+          endpoints: {
+            "/v1/chat/completions": { inputFilter: { audio: true } },
+          },
+        },
+      },
+    },
+  },
+};
+
+test("buildTargetSettings 只看模型层生效值，端点级差异单独标记", () => {
+  const settings = buildTargetSettings(filterConfig, "ark", "glm-5.3-flash");
+  assert.deepEqual(settings.inputFilter, { image: true, audio: false, file: false, video: false });
+  assert.deepEqual(settings.endpointOverrides, ["/v1/chat/completions"]);
+  // 端点把 image 改成关、audio 改成开，两行都要提示会被端点覆盖。
+  assert.deepEqual(settings.overriddenKeys.sort(), ["audio", "image"]);
+
+  // 模型层没配置时回落到供应商层，但展示上没有「继承」概念。
+  const inherited = buildTargetSettings(config, "ark", "glm-5.3-flash");
+  assert.deepEqual(inherited.inputFilter, { image: false, audio: false, file: false, video: false });
+  assert.deepEqual(inherited.endpointOverrides, []);
+  assert.deepEqual(inherited.overriddenKeys, []);
+});
+
+test("toggleFilterValue 只翻一个键并回传完整四项", () => {
+  const settings = buildTargetSettings(filterConfig, "ark", "glm-5.3-flash");
+  const next = toggleFilterValue(settings, "video");
+  assert.deepEqual(next, { image: true, audio: false, file: false, video: true });
+  assert.deepEqual(
+    FILTER_KEYS.map((key) => key in next),
+    [true, true, true, true],
+    "写盘必须四项齐全，否则缺键会被当成 false",
+  );
+  assert.equal(settings.inputFilter.video, false, "原对象不能被修改");
+});
+
+test("buildTargets 按 provider/model 建索引，选中变化只查表", () => {
+  const entries = buildCatalog(filterConfig);
+  const targets = buildTargets(filterConfig, entries);
+  const state = createTuiState(entries, status, true, [], targets);
+  assert.equal(selectedTargetSettings(state)?.inputFilter.image, true);
+
+  const moved = moveSelection(state, 1);
+  const next = selectedTargetSettings(moved);
+  assert.equal(next?.model, "deepseek-chat");
+  assert.deepEqual(next?.inputFilter, { image: false, audio: false, file: false, video: false });
+  assert.notEqual(next, selectedTargetSettings(state), "选中变化应换成新模型的快照");
+});
+
+const reasoningConfig: Config = {
+  ...config,
+  providers: {
+    ...config.providers,
+    ark: {
+      ...config.providers.ark,
+      reasoning: "minimal",
+      targets: {
+        "glm-5.3-flash": {
+          reasoning: "high",
+          endpoints: { "/v1/responses": { reasoning: "none" } },
+        },
+      },
+    },
+  },
+};
+
+test("设置块行顺序固定为四行过滤、思考强度、warp 模式", () => {
+  assert.deepEqual(SETTINGS_ROWS, ["image", "audio", "file", "video", "reasoning", "mode"]);
+  const settings = buildTargetSettings(reasoningConfig, "ark", "glm-5.3-flash");
+  assert.equal(settings.reasoning, "high", "模型级优先于供应商级");
+  assert.deepEqual(settings.endpointOverrides, ["/v1/responses"]);
+  assert.equal(buildTargetSettings(config, "ark", "glm-5.3-flash").reasoning, "passthrough");
+});
+
+test("思考强度值列表固定 9 项，关闭只对应 none", () => {
+  assert.deepEqual(
+    REASONING_CHOICES.map((choice) => choice.label),
+    ["不修改", "关闭", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"],
+  );
+  assert.deepEqual(
+    REASONING_CHOICES.map((choice) => choice.value),
+    ["passthrough", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"],
+  );
+  assert.equal(REASONING_CHOICES.some((choice) => (choice.value as string) === "off"), false);
+});
+
+test("思考强度值列表打开时停在生效值，↑↓ 循环，Esc 回到设置块", () => {
+  const entries = buildCatalog(reasoningConfig);
+  const targets = buildTargets(reasoningConfig, entries);
+  const base = createTuiState(entries, status, true, [], targets);
+  const reasoningRow = { ...focusSettings(base), settingsCursor: SETTINGS_ROWS.indexOf("reasoning") };
+
+  const opened = beginReasoningValues(reasoningRow);
+  assert.equal(opened.confirming, "reasoning-values");
+  assert.equal(selectedReasoningChoice(opened).value, "high");
+
+  const last = { ...opened, reasoningCursor: REASONING_CHOICES.length - 1 };
+  assert.equal(moveReasoningValue(last, 1).reasoningCursor, 0, "↓ 从末项回到首项");
+  assert.equal(
+    moveReasoningValue({ ...opened, reasoningCursor: 0 }, -1).reasoningCursor,
+    REASONING_CHOICES.length - 1,
+    "↑ 从首项回到末项",
+  );
+
+  const noneKey = targetKey("ark", "glm-5.3-flash");
+  const none = beginReasoningValues({
+    ...reasoningRow,
+    targets: {
+      ...targets,
+      [noneKey]: { ...targets[noneKey], reasoning: "none" },
+    },
+  });
+  assert.equal(selectedReasoningChoice(none).label, "关闭", "配置里的 none 显示为关闭");
+
+  const backed = backToModelSettings(opened);
+  assert.equal(backed.confirming, null);
+  assert.equal(selectedSettingsRow(backed), "reasoning");
+});
+
+test("思考强度值列表在右栏渲染 9 项、标题与二层页脚", () => {
+  const entries = buildCatalog(reasoningConfig);
+  const targets = buildTargets(reasoningConfig, entries);
+  const base = createTuiState(entries, status, true, [], targets);
+  const opened = beginReasoningValues({
+    ...focusSettings(base),
+    settingsCursor: SETTINGS_ROWS.indexOf("reasoning"),
+  });
+  const output = renderTui(opened, { height: 30, width: 90 });
+
+  assert.match(output, /思考强度  ark\/glm-5\.3-flash/);
+  assert.match(output, /▸ high/);
+  for (const label of ["不修改", "关闭", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]) {
+    assert.match(output, new RegExp(label));
+  }
+  assert.match(output, /↑↓ 选择 · Enter 应用 · Esc 返回/);
+  assertFrameFits(output, 90, 30, "思考强度值列表");
+});
+
+test("思考强度值列表在矮终端不越界", () => {
+  const entries = buildCatalog(reasoningConfig);
+  const base = createTuiState(entries, status, true, [], buildTargets(reasoningConfig, entries));
+  let state = focusSettings(base);
+  state = { ...state, settingsCursor: SETTINGS_ROWS.indexOf("reasoning") };
+  state = beginReasoningValues(state);
+
+  for (const height of [12, 16, 20, 24]) {
+    for (const width of [72, 90]) {
+      assertFrameFits(renderTui(state, { height, width }), width, height, `值列表 ${height}x${width}`);
+    }
+  }
+});
+
+test("自动刷新保留思考强度值列表的确认态与光标", () => {
+  const entries = buildCatalog(reasoningConfig);
+  const targets = buildTargets(reasoningConfig, entries);
+  const previous = {
+    ...beginReasoningValues({
+      ...focusSettings(createTuiState(entries, status, true, [], targets)),
+      settingsCursor: SETTINGS_ROWS.indexOf("reasoning"),
+    }),
+    reasoningCursor: 6,
+  };
+  const refreshed = {
+    ...createTuiState(entries, status, true, [], targets),
+    focus: "panel" as const,
+  };
+
+  const restored = restoreReasoningView(previous, refreshed);
+  assert.equal(restored.confirming, "reasoning-values");
+  assert.equal(restored.reasoningCursor, 6);
+  assert.equal(restored.focus, "panel");
+  assert.equal(selectedSettingsRow(restored), "reasoning");
+
+  const missingModel = restoreReasoningView(
+    previous,
+    createTuiState([], status, true, [], {}),
+  );
+  assert.equal(missingModel.confirming, null, "模型消失时不重开第二层");
+  assert.equal(missingModel.reasoningCursor, 6);
+});
+
+test("自动刷新时原模型消失：思考强度列表关闭并回到模型列表", () => {
+  const entries = buildCatalog(reasoningConfig);
+  const previous = {
+    ...beginReasoningValues({
+      ...focusSettings(
+        createTuiState(entries, status, true, [], buildTargets(reasoningConfig, entries)),
+      ),
+      settingsCursor: SETTINGS_ROWS.indexOf("reasoning"),
+    }),
+    reasoningCursor: 6,
+  };
+
+  // 原模型消失，但目录里还有别的模型：选中下标会落到别人身上。
+  const otherEntries = entries.filter(
+    (entry) => !(entry.provider === "ark" && entry.model === "glm-5.3-flash"),
+  );
+  const refreshed = createTuiState(otherEntries, status, true, [], buildTargets(reasoningConfig, otherEntries));
+  const restored = restoreReasoningView(previous, refreshed);
+
+  assert.equal(restored.confirming, null, "不能把第二层留在另一个模型上");
+  assert.equal(restored.focus, "list", "面板焦点收敛回模型列表");
+});
+
+test("模型页设置块显示四个过滤开关，默认全关且没有「继承」", () => {
+  const output = renderTui(createTuiState(buildCatalog(config), status, true), {
+    height: 24,
+    width: 80,
+  });
+  assert.match(output, /图片过滤\s+关/);
+  assert.match(output, /音频过滤\s+关/);
+  assert.match(output, /文件过滤\s+关/);
+  assert.match(output, /视频过滤\s+关/);
+  assert.match(output, /思考强度\s+不修改/);
+  assert.doesNotMatch(output, /继承/);
+});
+
+test("模型页设置块显示生效值与端点级提示", () => {
+  const entries = buildCatalog(filterConfig);
+  const state = createTuiState(entries, status, true, [], buildTargets(filterConfig, entries));
+  const output = renderTui(state, { height: 30, width: 90 });
+
+  assert.match(output, /图片过滤\s+开/);
+  assert.match(output, /音频过滤\s+关/);
+  assert.match(output, /文件过滤\s+关/);
+  assert.match(output, /音频过滤\s+关\s+被端点级覆盖/);
+  assert.match(output, /图片过滤\s+开\s+被端点级覆盖/);
+  assert.match(output, /端点级配置（只改模型级）：/);
+  assert.match(output, /chat\/completions/);
+  assertFrameFits(output, 90, 30, "端点级提示");
 });
 
 test("模型页渲染选中模型设置块与 warp 说明，且不泄露密钥", () => {

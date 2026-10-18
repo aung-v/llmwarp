@@ -166,8 +166,11 @@ test("normalizeInputFilter 校验布尔值并带字段路径报错", () => {
     image: true,
     file: false,
   });
-  // 未知键忽略
-  assert.deepEqual(normalizeInputFilter({ image: true, other: 1 }, "p"), { image: true });
+  // 未知键是配置错误，不能静默忽略（否则拼错开关名会以为已开启）。
+  assert.throws(
+    () => normalizeInputFilter({ image: true, other: 1 }, "providers.ark.inputFilter"),
+    /providers\.ark\.inputFilter\.other/,
+  );
   // 非布尔按字段路径报错
   assert.throws(
     () => normalizeInputFilter({ image: "yes" }, "providers.ark.inputFilter"),
@@ -248,6 +251,10 @@ test("normalizeReasoning 只接受固定集合并带字段路径报错", () => {
     /providers\.ark\.targets\.doubao\.reasoning/,
   );
   assert.throws(
+    () => normalizeReasoning("off", "providers.ark.reasoning"),
+    /providers\.ark\.reasoning/,
+  );
+  assert.throws(
     () => normalizeReasoning(3, "providers.ark.reasoning"),
     /providers\.ark\.reasoning/,
   );
@@ -258,7 +265,7 @@ test("normalizeTargets 解析模型 / endpoint 两层 reasoning", () => {
     {
       doubao: {
         reasoning: "high",
-        endpoints: { "/responses": { reasoning: "off", inputFilter: { image: true } } },
+        endpoints: { "/responses": { reasoning: "none", inputFilter: { image: true } } },
       },
     },
     "providers.ark.targets",
@@ -266,7 +273,7 @@ test("normalizeTargets 解析模型 / endpoint 两层 reasoning", () => {
   assert.deepEqual(targets, {
     doubao: {
       reasoning: "high",
-      endpoints: { "/responses": { reasoning: "off", inputFilter: { image: true } } },
+      endpoints: { "/responses": { reasoning: "none", inputFilter: { image: true } } },
     },
   });
   assert.throws(
@@ -288,14 +295,14 @@ test("resolveReasoning 按 endpoint > model > provider 覆盖，缺省 passthrou
     targets: {
       doubao: {
         reasoning: "medium",
-        endpoints: { "/responses": { reasoning: "off" } },
+        endpoints: { "/responses": { reasoning: "none" } },
       },
     },
   };
   assert.equal(resolveReasoning(provider, "glm", "/v1/chat/completions"), "low");
   assert.equal(resolveReasoning(provider, "doubao", "/v1/chat/completions"), "medium");
-  assert.equal(resolveReasoning(provider, "doubao", "/v1/responses"), "off");
-  assert.equal(resolveReasoning(provider, "doubao", "/responses"), "off");
+  assert.equal(resolveReasoning(provider, "doubao", "/v1/responses"), "none");
+  assert.equal(resolveReasoning(provider, "doubao", "/responses"), "none");
   assert.equal(resolveReasoning(provider, undefined, "/v1/responses"), "low");
   assert.equal(resolveReasoning({ baseUrl: "http://x/v1", apiKey: "k" }, "m", "/v1/responses"), "passthrough");
 });

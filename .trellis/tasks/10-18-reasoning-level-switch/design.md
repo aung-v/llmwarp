@@ -19,7 +19,7 @@
       "doubao": {
         "reasoning": "high",
         "endpoints": {
-          "/responses": { "reasoning": "off" }
+          "/responses": { "reasoning": "none" }
         }
       }
     }
@@ -30,7 +30,6 @@
 ```ts
 export type ReasoningSetting =
   | "passthrough"
-  | "off"
   | "none"
   | "minimal"
   | "low"
@@ -76,8 +75,8 @@ export function applyReasoning(
 endpoint 归一化沿用 input filter 任务：`stripVersionPrefix` + 去尾部 `/`。
 
 - `passthrough`：直接返回原 Buffer，`requested = null`、`applied = null`；不解析 body，保持快路径。
-- `off` / 具体等级：解析 JSON；失败、空 body、数组 body 原样返回，`applied = null`。
-- 计算要写入的值：`off` → `"none"`；等级 → 原字符串。
+- `none` / 具体等级：解析 JSON；失败、空 body、数组 body 原样返回，`applied = null`。
+- 写入值：设置值原样写入（`none` 即关闭）。
 
 字段规则：
 

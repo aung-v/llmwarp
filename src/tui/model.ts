@@ -1,4 +1,11 @@
-import { isValidModelName, type Config } from "../config.js";
+import {
+  isValidModelName,
+  resolveInputFilter,
+  resolveReasoning,
+  type Config,
+  type InputFilterConfig,
+  type ReasoningSetting,
+} from "../config.js";
 import type { InputFilterCounts } from "../inputfilter.js";
 import type { ReasoningInfo } from "../reasoning.js";
 import { STATS_WINDOWS, type StatsWindow, type StatsWindowId } from "../stats/aggregate.js";
@@ -60,8 +67,14 @@ export interface CatalogItem {
   legacy?: boolean;
 }
 
-/** 确认态意图：切换模型 / 切换 warp 模式 / 重启守护进程 / 供应商操作菜单 / 删除供应商。 */
-export type ConfirmIntent = "switch" | "mode" | "restart" | "provider-action" | "remove-provider";
+/** 确认态意图：切换模型 / 思考强度值列表 / 切换 warp 模式 / 重启 / 供应商操作 / 删除供应商。 */
+export type ConfirmIntent =
+  | "switch"
+  | "reasoning-values"
+  | "mode"
+  | "restart"
+  | "provider-action"
+  | "remove-provider";
 
 /** 顶部导航页：模型列表 / 供应商管理 / 用量统计 / 运行状态（守护进程 + 反馈 + 请求活动）。 */
 export type TuiPage = "models" | "providers" | "stats" | "runtime";
@@ -96,11 +109,114 @@ export const PROVIDER_ACTIONS: { action: ProviderAction; label: string }[] = [
   { action: "remove", label: "删除" },
 ];
 
-/** 模型页设置块里的行；后续任务会往里面追加过滤四行与思考强度。 */
-export type SettingsRow = "image" | "audio" | "file" | "video" | "reasoning" | "mode";
+/** 输入过滤的四个媒体类型；顺序即设置块里的展示顺序。 */
+export type InputFilterKey = keyof Required<InputFilterConfig>;
 
-/** 设置块当前落地顺序：warp 模式固定在最后一行。 */
-export const SETTINGS_ROWS: SettingsRow[] = ["mode"];
+export const FILTER_KEYS: InputFilterKey[] = ["image", "audio", "file", "video"];
+
+/** 四个类型的中文标签，设置块与反馈文案共用。 */
+export const FILTER_LABELS: Record<InputFilterKey, string> = {
+  image: "图片",
+  audio: "音频",
+  file: "文件",
+  video: "视频",
+};
+
+/** 模型页设置块里的行：过滤四行 + 思考强度 + warp 模式。 */
+export type SettingsRow = InputFilterKey | "reasoning" | "mode";
+
+/** 设置块的行顺序：warp 模式固定在最后一行。 */
+export const SETTINGS_ROWS: SettingsRow[] = ["image", "audio", "file", "video", "reasoning", "mode"];
+
+/** 思考强度值列表：`off` 不是配置值；「关闭」只是 `none` 的 TUI 标签。 */
+export const REASONING_CHOICES: { value: ReasoningSetting; label: string }[] = [
+  { value: "passthrough", label: "不修改" },
+  { value: "none", label: "关闭" },
+  { value: "minimal", label: "minimal" },
+  { value: "low", label: "low" },
+  { value: "medium", label: "medium" },
+  { value: "high", label: "high" },
+  { value: "xhigh", label: "xhigh" },
+  { value: "max", label: "max" },
+  { value: "ultra", label: "ultra" },
+];
+
+export function reasoningLabel(value: ReasoningSetting): string {
+  return REASONING_CHOICES.find((choice) => choice.value === value)?.label ?? value;
+}
+
+/** 某个模型的设置快照：生效值 + 端点级覆盖信息。 */
+export interface TargetSettings {
+  provider: string;
+  model: string;
+  /** 模型层视角的生效值（模型级优先，其次供应商级）；未配置按 false 展示。 */
+  inputFilter: Required<InputFilterConfig>;
+  /** 模型层视角的生效思考强度；未配置时按 `passthrough` 展示。 */
+  reasoning: ReasoningSetting;
+  /** 在配置文件里带 `inputFilter` 或 `reasoning` 的端点级配置路径；这里只提示，不修改。 */
+  endpointOverrides: string[];
+  /** 某些端点把该类型的值改成了与模型级不同，对应行标「被端点级覆盖」。 */
+  overriddenKeys: InputFilterKey[];
+}
+
+function fullFilter(filter: InputFilterConfig | undefined): Required<InputFilterConfig> {
+  return {
+    image: filter?.image === true,
+    audio: filter?.audio === true,
+    file: filter?.file === true,
+    video: filter?.video === true,
+  };
+}
+
+export function targetKey(provider: string, model: string): string {
+  return `${provider}/${model}`;
+}
+
+/**
+ * 按三层规则算出某个模型的生效过滤值（模型页展示口径：不指定 endpoint 时看模型级）。
+ * 端点级配置单独列出，只做提示，TUI 不去改它们。
+ */
+export function buildTargetSettings(config: Config, provider: string, model: string): TargetSettings {
+  const details = config.providers[provider];
+  const target = details?.targets?.[model];
+  // 展示「模型级」的生效值：用不存在的 endpoint 解析，只看 model / provider 两层；
+  // 端点级差异单独列出来提示，不混进用户正在编辑的这一层。
+  const resolved = fullFilter(details ? resolveInputFilter(details, model, "") : undefined);
+  const reasoning = details ? resolveReasoning(details, model, "") : "passthrough";
+  const endpointOverrides = Object.entries(target?.endpoints ?? {})
+    .filter(([, value]) => Boolean(value.inputFilter || value.reasoning))
+    .map(([endpoint]) => endpoint);
+
+  const overriddenKeys = FILTER_KEYS.filter((key) =>
+    Object.values(target?.endpoints ?? {}).some(
+      (value) => value.inputFilter && (value.inputFilter[key] === true) !== resolved[key],
+    ),
+  );
+
+  return { provider, model, inputFilter: resolved, reasoning, endpointOverrides, overriddenKeys };
+}
+
+/** 刷新时一次性算出所有可切换模型的设置，选中变化只查表，不需要再读配置。 */
+export function buildTargets(config: Config, entries: CatalogItem[]): Record<string, TargetSettings> {
+  const targets: Record<string, TargetSettings> = {};
+  for (const entry of entries) {
+    if (!entry.model) continue;
+    targets[targetKey(entry.provider, entry.model)] = buildTargetSettings(
+      config,
+      entry.provider,
+      entry.model,
+    );
+  }
+  return targets;
+}
+
+/** 切换某个媒体类型；写盘时四项整体落盘，避免半份配置把其他类型静默关掉。 */
+export function toggleFilterValue(
+  settings: TargetSettings,
+  key: InputFilterKey,
+): Required<InputFilterConfig> {
+  return { ...settings.inputFilter, [key]: !settings.inputFilter[key] };
+}
 
 export interface TuiState {
   page: TuiPage;
@@ -109,6 +225,10 @@ export interface TuiState {
   selected: number;
   /** 模型页设置块的高亮行下标（配合 `SETTINGS_ROWS`）。 */
   settingsCursor: number;
+  /** 思考强度值列表的高亮项下标（配合 `REASONING_CHOICES`）。 */
+  reasoningCursor: number;
+  /** 按 `targetKey(provider, model)` 索引的设置快照；选中变化时只查表。 */
+  targets: Record<string, TargetSettings>;
   providers: ProviderSummary[];
   providerCursor: number;
   /** 「编辑 / 删除」操作菜单的高亮项下标（0=编辑，1=删除）。 */
@@ -173,6 +293,7 @@ export function createTuiState(
   status: StatusSnapshot | null,
   useClientModel = true,
   providers: ProviderSummary[] = [],
+  targets: Record<string, TargetSettings> = {},
 ): TuiState {
   const active = status?.active;
   const activeIndex = active?.model
@@ -186,6 +307,8 @@ export function createTuiState(
     entries,
     selected: selected >= 0 ? selected : 0,
     settingsCursor: 0,
+    reasoningCursor: 0,
+    targets,
     providers,
     providerCursor: 0,
     providerActionIndex: 0,
@@ -262,6 +385,13 @@ export function selectedSettingsRow(state: TuiState): SettingsRow {
   return SETTINGS_ROWS[state.settingsCursor] ?? SETTINGS_ROWS[SETTINGS_ROWS.length - 1];
 }
 
+/** 当前选中模型的设置快照；模型不可选或配置不可读时为 null。 */
+export function selectedTargetSettings(state: TuiState): TargetSettings | null {
+  const entry = selectedEntry(state);
+  if (!entry?.model) return null;
+  return state.targets[targetKey(entry.provider, entry.model)] ?? null;
+}
+
 /** 统计页 `h`：在 `STATS_WINDOWS` 的 5 个窗口间循环（`delta` = ±1）。 */
 export function toggleStatsWindow(state: TuiState, delta = 1): TuiState {
   if (navigationLocked(state) || state.page !== "stats") return state;
@@ -303,6 +433,47 @@ export function restoreStatsView(previous: TuiState, next: TuiState): TuiState {
   return { ...next, statsWindow: previous.statsWindow };
 }
 
+/**
+ * 刷新时恢复思考强度值列表：确认态、光标与设置块行都保住。
+ * 当前模型在刷新后消失时只收敛光标，不重开第二层。
+ */
+export function restoreReasoningView(previous: TuiState, next: TuiState): TuiState {
+  const reasoningCursor = Math.min(
+    previous.reasoningCursor,
+    Math.max(REASONING_CHOICES.length - 1, 0),
+  );
+  const restored = { ...next, reasoningCursor };
+  const previousEntry = selectedEntry(previous);
+  // 刷新后原模型可能已从目录消失；那时选中下标会落到别的模型上，
+  // 不能把第二层列表或面板焦点留在那个模型上，否则 Enter 会写错 target。
+  const selectionSurvived = Boolean(
+    previousEntry &&
+      next.entries.some(
+        (entry) => entry.provider === previousEntry.provider && entry.model === previousEntry.model,
+      ),
+  );
+  if (previous.page === "models" && previousEntry && !selectionSurvived) {
+    return {
+      ...restored,
+      confirming: null,
+      focus: previous.focus === "panel" ? "list" : restored.focus,
+    };
+  }
+  if (
+    previous.confirming !== "reasoning-values" ||
+    previous.page !== "models" ||
+    !selectionSurvived ||
+    !selectedTargetSettings(restored)
+  ) {
+    return restored;
+  }
+  return {
+    ...restored,
+    confirming: "reasoning-values",
+    settingsCursor: SETTINGS_ROWS.indexOf("reasoning"),
+  };
+}
+
 export function selectedEntry(state: TuiState): CatalogItem | null {
   return state.entries[state.selected] ?? null;
 }
@@ -318,6 +489,48 @@ export function beginSwitchConfirm(state: TuiState): TuiState {
   if (navigationLocked(state) || state.page !== "models" || !entry?.selectable || !entry.model)
     return state;
   return { ...state, confirming: "switch", message: null };
+}
+
+/** 思考强度行 Enter：打开右栏值列表，光标停在当前生效值。 */
+export function beginReasoningValues(state: TuiState): TuiState {
+  if (navigationLocked(state)) return state;
+  if (state.page !== "models" || state.focus !== "panel") return state;
+  if (selectedSettingsRow(state) !== "reasoning") return state;
+  const settings = selectedTargetSettings(state);
+  if (!settings) return state;
+  const cursor = REASONING_CHOICES.findIndex((choice) => choice.value === settings.reasoning);
+  return {
+    ...state,
+    confirming: "reasoning-values",
+    reasoningCursor: cursor >= 0 ? cursor : 0,
+    message: null,
+  };
+}
+
+/** 值列表内 ↑ / ↓：9 项循环移动。 */
+export function moveReasoningValue(state: TuiState, delta: number): TuiState {
+  if (state.confirming !== "reasoning-values" || state.switching) return state;
+  const next =
+    (((state.reasoningCursor + delta) % REASONING_CHOICES.length) + REASONING_CHOICES.length) %
+    REASONING_CHOICES.length;
+  return { ...state, reasoningCursor: next };
+}
+
+/** 值列表当前高亮的项；下标异常时回落到第一项（不修改）。 */
+export function selectedReasoningChoice(
+  state: TuiState,
+): { value: ReasoningSetting; label: string } {
+  return REASONING_CHOICES[state.reasoningCursor] ?? REASONING_CHOICES[0];
+}
+
+/** 值列表 Esc：回到设置块第一层，光标停在思考强度行。 */
+export function backToModelSettings(state: TuiState): TuiState {
+  if (state.confirming !== "reasoning-values") return state;
+  return {
+    ...state,
+    confirming: null,
+    settingsCursor: SETTINGS_ROWS.indexOf("reasoning"),
+  };
 }
 
 /** warp 模式的目标值：Enter 始终切到另一档。 */

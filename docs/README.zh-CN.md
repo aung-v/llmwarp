@@ -158,6 +158,7 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 - 删除的块会在该 content 数组内首个被删位置留一句说明，如 `[llmwarp: removed 2 images, 1 file]`；请求照常转发，llmwarp 不拦截、不本地报错。
 - 只删能确定的媒体块（Chat 的 `image_url` / `input_audio` / `file`，Responses 的 `input_image` / `input_audio` / `input_file`）；multipart 上传、`computer_call_output` 截图、`code_interpreter_call.outputs` 一律原样透传。
 - 统计 JSONL 与 TUI 活动面板会显示删了什么（`img×2 aud×1`），请求的其他部分不变。
+- 在 TUI 里选中模型后，可在模型页右栏「选中模型设置」块中直接切换 `图片过滤` / `音频过滤` / `文件过滤` / `视频过滤`（`←→` 切到设置块，`↑↓` 选行，`Enter` 切换）。写盘会一次性写入模型级四项 `providers.<p>.targets.<m>.inputFilter` 并自动 reload daemon。
 
 ### 思考强度
 
@@ -172,14 +173,15 @@ curl http://127.0.0.1:8787/v1/chat/completions \
     "targets": {
       "doubao-seed-1-6": {
         "reasoning": "high",                 // 该模型一律 high
-        "endpoints": { "/responses": { "reasoning": "off" } }  // 该端点关掉思考
+        "endpoints": { "/responses": { "reasoning": "none" } }  // 该端点关掉思考
       }
     }
   }
 }
 ```
 
-- 取值：`passthrough`（默认，body 连解析都不做）、`off`（写 `none`），或 `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` / `ultra` 之一。
+- 取值：`passthrough`（默认，body 连解析都不做），或 `none`（关闭思考） / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` / `ultra` 之一。
+- 在 TUI 里把光标移到模型页「选中模型设置」的 `思考强度` 行，按 `Enter` 打开右栏的 9 项值列表（`不修改` / `关闭` / 7 档等级）；`↑↓` 选择，`Enter` 写入 `providers.<p>.targets.<m>.reasoning` 并自动 reload，`Esc` 返回。`关闭` 只是 TUI 标签，写盘值是 `none`。
 - 层级与输入过滤一致：endpoint > model > provider，谁先定义 `reasoning` 就整份用谁的值。
 - `/chat/completions` 写顶层 `reasoning_effort`；`/responses` 写 `reasoning.effort`；写入时会删掉另一个等价字段，避免一次请求带两个冲突的值。其他路径不改。
 - llmwarp 不探测上游支持什么，也不兜底换值：上游报错原样透出。

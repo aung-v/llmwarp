@@ -83,7 +83,7 @@ export function applyReasoning(body: Buffer, endpoint: string, setting: Reasonin
   const root = asObject(parsed);
   if (!root) return untouched;
 
-  const applied = setting === "off" ? "none" : setting;
+  const applied = setting;
   // 客户端值优先读本路径对应的字段，其次读另一个等价字段；都没有记 null。
   const requested =
     target === "chat"
