@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "质量门与测试习惯"}
+{"file": ".trellis/spec/backend/usage-stats.md", "reason": "统计字段与测试清单是否同步"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层数据流是否闭环"}
