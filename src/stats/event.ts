@@ -207,6 +207,17 @@ export function parseRateLimitHeaders(headers: Headers): RateLimitInfo | null {
 }
 
 /**
+ * 上游目标的唯一键：`provider + model + endpoint`。
+ *
+ * 聚合分组（全期 / 各时间窗口）与原始事件缓冲（每目标最近 N 条）必须共用同一份实现，
+ * 否则两处口径会随字段变化分叉（例如将来给目标加维度时只改了其中一处）。
+ * `\u0000` / `\u0001` 分隔符不会出现在 provider / model / endpoint 里。
+ */
+export function targetKey(event: RequestEvent): string {
+  return [event.provider ?? "\u0000", event.model ?? "\u0000", event.endpoint].join("\u0001");
+}
+
+/**
  * 按 design.md §3.1 归属路由。归属主键是解析后的真实上游目标；这里只决定 `routeKind`。
  * `resolved` 为 null 表示 `resolveModelRoute` 抛出 `RoutingError`（无上游目标）。
  */

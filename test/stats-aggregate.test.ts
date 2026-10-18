@@ -6,8 +6,9 @@ import {
   STATS_WINDOWS,
   aggregateEvents,
   histogramPercentile,
+  lastPerTarget,
 } from "../src/stats/aggregate.js";
-import { RecentBuffer, STATS_RECENT_CAPACITY } from "../src/stats/recent.js";
+import { RecentBuffer, STATS_RECENT_CAPACITY, STATS_RECENT_PER_TARGET } from "../src/stats/recent.js";
 import type { RequestEvent } from "../src/stats/event.js";
 
 const NOW = new Date(2026, 8, 27, 12, 0, 0).getTime();
@@ -312,7 +313,7 @@ test("RecentBuffer 容量上限 500 且按加入顺序保留最新事件", () =>
   assert.equal(buffer.events().length, STATS_RECENT_CAPACITY);
 });
 
-test("snapshot 返回 5 个窗口，recent10 取缓冲末尾 10 条", () => {
+test("snapshot 返回 5 个窗口，recent10 对单目标取最近 10 条", () => {
   const accumulator = new AggregateAccumulator();
   const buffer: RequestEvent[] = [];
   for (let index = 0; index < 12; index += 1) {
@@ -328,6 +329,119 @@ test("snapshot 返回 5 个窗口，recent10 取缓冲末尾 10 条", () => {
   assert.equal(result.windows.find((window) => window.id === "recent10")?.overall.requests, 10);
   assert.equal(result.windows.find((window) => window.id === "hour1")?.overall.requests, 12);
   assert.equal(result.windows.find((window) => window.id === "today")?.overall.requests, 12);
+});
+
+test("recent10 按每个上游目标各取最近 10 条，而不是全局最近 10 条", () => {
+  const accumulator = new AggregateAccumulator();
+  const buffer = new RecentBuffer();
+  // alpha 与 beta 各 12 条，交替到达：全局最后 10 条只覆盖两个目标各 5 条。
+  for (let index = 0; index < 12; index += 1) {
+    for (const provider of ["alpha", "beta"]) {
+      const item = event({
+        ts: NOW - (11 - index) * 1000,
+        provider,
+        model: `${provider}-chat`,
+      });
+      accumulator.add(item);
+      buffer.add(item);
+    }
+  }
+  const recent10 = accumulator
+    .snapshot(NOW, 30, buffer.events(), buffer.perTargetEvents())
+    .windows.find((window) => window.id === "recent10")!;
+
+  assert.equal(recent10.targets.length, 2);
+  assert.deepEqual(
+    recent10.targets.map((target) => [target.provider, target.requests]),
+    [
+      ["alpha", 10],
+      ["beta", 10],
+    ],
+    "每个目标各自保留最近 10 条",
+  );
+  assert.equal(recent10.overall.requests, 20);
+  assert.equal(
+    recent10.overall.requests,
+    recent10.targets.reduce((sum, target) => sum + target.requests, 0),
+  );
+});
+
+test("lastPerTarget 保留输入顺序，只截掉每个目标更早的样本", () => {
+  const alphaOld = event({ ts: NOW, provider: "alpha", model: "alpha-chat" });
+  const beta = event({ ts: NOW + 1, provider: "beta", model: "beta-chat" });
+  const alphaNew = event({ ts: NOW + 2, provider: "alpha", model: "alpha-chat" });
+
+  assert.deepEqual(
+    lastPerTarget([alphaOld, beta, alphaNew], 1).map((item) => item.provider),
+    ["beta", "alpha"],
+    "拍平输出仍按输入顺序，而不是按目标分组重排",
+  );
+});
+
+test("高频目标刷满全局缓冲后，低频目标仍保留自己的最近 10 条", () => {
+  const buffer = new RecentBuffer();
+  // cold 目标只在最前面出现过 12 条，随后被全局环挤出。
+  for (let index = 0; index < 12; index += 1) {
+    buffer.add(event({ ts: NOW + index, provider: "cold", model: "cold-chat" }));
+  }
+  // hot 目标产生 500+ 条，足以把全局环刷满并挤掉旧样本。
+  for (let index = 0; index < STATS_RECENT_CAPACITY + 50; index += 1) {
+    buffer.add(event({ ts: NOW + 100 + index, provider: "hot", model: "hot-chat" }));
+  }
+  assert.equal(buffer.events().filter((item) => item.provider === "cold").length, 0, "全局环确实已挤掉 cold");
+
+  const recent10 = lastPerTarget(buffer.perTargetEvents(), STATS_RECENT_PER_TARGET);
+  const cold = recent10.filter((item) => item.provider === "cold");
+  const hot = recent10.filter((item) => item.provider === "hot");
+  assert.equal(cold.length, 10, "低频目标仍有自己的最近 10 条");
+  assert.equal(hot.length, 10, "高频目标同样只取最近 10 条");
+  assert.equal(cold[0]?.ts, NOW + 2, "保留的是 cold 最近的 10 条");
+  assert.equal(hot[hot.length - 1]?.ts, NOW + 100 + STATS_RECENT_CAPACITY + 49);
+});
+
+test("RecentBuffer.perTargetEvents 每目标最多 10 条且组内升序", () => {
+  const buffer = new RecentBuffer();
+  for (let index = 0; index < 15; index += 1) {
+    buffer.add(event({ ts: NOW + index, provider: "alpha", model: "alpha-chat" }));
+  }
+  for (let index = 0; index < 3; index += 1) {
+    buffer.add(event({ ts: NOW + index, provider: "beta", model: "beta-chat" }));
+  }
+  const events = buffer.perTargetEvents();
+  const alpha = events.filter((item) => item.provider === "alpha");
+  const beta = events.filter((item) => item.provider === "beta");
+  assert.deepEqual(alpha.map((item) => item.ts), [NOW + 5, NOW + 6, NOW + 7, NOW + 8, NOW + 9, NOW + 10, NOW + 11, NOW + 12, NOW + 13, NOW + 14]);
+  assert.deepEqual(beta.map((item) => item.ts), [NOW, NOW + 1, NOW + 2]);
+  // 返回副本：外部改动不影响缓冲。
+  events.pop();
+  assert.equal(buffer.perTargetEvents().length, alpha.length + beta.length);
+});
+
+test("recent10 的 unrouted 取最近 10 条本地失败且不进 overall / targets", () => {
+  const accumulator = new AggregateAccumulator();
+  const buffer = new RecentBuffer();
+  for (let index = 0; index < 12; index += 1) {
+    const unrouted = event({
+      ts: NOW + index,
+      routeKind: "unrouted",
+      provider: null,
+      model: null,
+      ok: false,
+      status: 400,
+      usage: null,
+    });
+    accumulator.add(unrouted);
+    buffer.add(unrouted);
+  }
+  buffer.add(event({ ts: NOW + 100, provider: "alpha", model: "alpha-chat" }));
+
+  const recent10 = accumulator
+    .snapshot(NOW + 1000, 30, buffer.events(), buffer.perTargetEvents())
+    .windows.find((window) => window.id === "recent10")!;
+  assert.equal(recent10.unrouted.requests, 10);
+  assert.equal(recent10.unrouted.errors, 10);
+  assert.equal(recent10.overall.requests, 1);
+  assert.deepEqual(recent10.targets.map((target) => target.provider), ["alpha"]);
 });
 
 test("hour1 按完成时刻过滤：超过 1 小时的长请求在完成时计入", () => {

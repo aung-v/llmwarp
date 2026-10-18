@@ -48,7 +48,13 @@ export class StatsCollector {
   /** 历史聚合快照；纯内存计算，进程内最多读一次落盘历史。 */
   get aggregate(): Aggregate {
     this.seed();
-    return this.accumulator.snapshot(this.now(), this.retentionDays, this.recent.events());
+    return this.accumulator.snapshot(
+      this.now(),
+      this.retentionDays,
+      this.recent.events(),
+      // 「最近10条」按每个上游目标各取最近 10 条，不能从会被高频目标刷满的全局环切片。
+      this.recent.perTargetEvents(),
+    );
   }
 
   configure(config: CollectorConfig): void {

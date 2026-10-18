@@ -10,7 +10,8 @@
  * 固定桶数即可，得到「≤ 该边界」的近似分位。代价是分位落在桶的边界上，不再精确到 1ms；
  * 换取的是查询成本恒定。边界见 `LATENCY_BOUNDS`。
  */
-import type { RequestEvent } from "./event.js";
+import { targetKey, type RequestEvent } from "./event.js";
+import { STATS_RECENT_PER_TARGET } from "./recent.js";
 import { dayKey, hourKey, recentDayKeys } from "./store.js";
 
 export interface AggregateMetrics {
@@ -293,11 +294,6 @@ function metricsOf(bucket: Bucket): AggregateMetrics {
   };
 }
 
-/** 上游身份键：provider + model + endpoint。routeKind 只用于 unrouted 判定，不参与分组。 */
-function targetKey(event: RequestEvent): string {
-  return [event.provider ?? "\u0000", event.model ?? "\u0000", event.endpoint].join("\u0001");
-}
-
 /** 目标排序：请求数降序，再按 provider / model / endpoint 稳定收敛。全期与窗口共用同一口径。 */
 function sortTargets(targets: Map<string, AccumulatedTarget>): TargetAggregate[] {
   return [...targets.values()]
@@ -348,6 +344,33 @@ export function aggregateEvents(events: readonly RequestEvent[]): {
     addToBucket(target.bucket, event);
   }
   return { overall: metricsOf(overall), targets: sortTargets(targets), unrouted: metricsOf(unrouted) };
+}
+
+/**
+ * 每个上游目标各取最近 `limit` 条。
+ *
+ * 「最近10条」窗口的口径是**每个目标**自己的最近 N 条，而不是全局最近 N 条：
+ * 全局切片会让高频目标吃掉全部名额，低频目标行只剩零星样本甚至整行消失。
+ * `unrouted` 事件（provider / model 为空）按同一个键自成一组，
+ * 于是窗口的「未发出」也取最近 N 条，命中 / 未发出仍在同一口径下自洽。
+ */
+export function lastPerTarget(events: readonly RequestEvent[], limit: number): RequestEvent[] {
+  if (limit <= 0) return [];
+  const totals = new Map<string, number>();
+  for (const event of events) {
+    const key = targetKey(event);
+    totals.set(key, (totals.get(key) ?? 0) + 1);
+  }
+  const seen = new Map<string, number>();
+  const out: RequestEvent[] = [];
+  for (const event of events) {
+    const key = targetKey(event);
+    const index = seen.get(key) ?? 0;
+    seen.set(key, index + 1);
+    // 组内剩余条数（含当前条）≤ limit 时保留，输出因此仍保持输入顺序。
+    if ((totals.get(key) ?? 0) - index <= limit) out.push(event);
+  }
+  return out;
 }
 
 /**
@@ -411,10 +434,17 @@ export class AggregateAccumulator {
 
   /**
    * 快照：全期 + 按天 / 按小时 + 按上游目标 + 5 个时间窗口。
-   * `recent` 是调用方（采集器）传入的环形缓冲事件，用于 `recent10` / `hour1` 窗口——
+   * `recent` 是调用方（采集器）传入的全局环形缓冲事件，用于 `hour1` 窗口——
    * 累加器本身只留桶、不留原始事件，避免常驻内存随流量增长。
+   * `perTargetRecent` 是「每个目标自己的最近 N 条」，用于 `recent10`；缺省退回 `recent`，
+   * 此时口径相同但样本受全局环容量限制（生产路径由采集器传每目标环）。
    */
-  snapshot(now: number = Date.now(), retentionDays = 30, recent: readonly RequestEvent[] = []): Aggregate {
+  snapshot(
+    now: number = Date.now(),
+    retentionDays = 30,
+    recent: readonly RequestEvent[] = [],
+    perTargetRecent: readonly RequestEvent[] = recent,
+  ): Aggregate {
     const keep = recentDayKeys(retentionDays, now);
 
     const orderedDays = [...this.days.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
@@ -454,7 +484,7 @@ export class AggregateAccumulator {
       hours,
       targets: this.collectTargets(keep),
       unrouted: metricsOf(unrouted),
-      windows: this.buildWindows(now, recent),
+      windows: this.buildWindows(now, recent, perTargetRecent),
     };
   }
 
@@ -497,12 +527,16 @@ export class AggregateAccumulator {
   }
 
   /** 5 个窗口，顺序 = `STATS_WINDOWS`；空窗口返回全 0，不省略。 */
-  private buildWindows(now: number, recent: readonly RequestEvent[]): StatsWindow[] {
+  private buildWindows(
+    now: number,
+    recent: readonly RequestEvent[],
+    perTargetRecent: readonly RequestEvent[],
+  ): StatsWindow[] {
     const values = new Map<
       StatsWindowId,
       { overall: AggregateMetrics; targets: TargetAggregate[]; unrouted: AggregateMetrics }
     >([
-      ["recent10", aggregateEvents(recent.slice(-10))],
+      ["recent10", aggregateEvents(lastPerTarget(perTargetRecent, STATS_RECENT_PER_TARGET))],
       ["hour1", aggregateEvents(recent.filter((event) => event.ts + event.durationMs >= now - HOUR_MS))],
       ["today", this.collectDays(new Set([dayKey(now)]))],
       ["week7", this.collectDays(recentDayKeys(7, now))],

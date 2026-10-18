@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { appendEvent, dayKey, hourKey, prune, readRange } from "../src/stats/store.js";
 import { StatsCollector } from "../src/stats/collect.js";
 import { STATS_RECENT_CAPACITY } from "../src/stats/recent.js";
+import type { Aggregate } from "../src/stats/aggregate.js";
 import type { RequestEvent } from "../src/stats/event.js";
 
 function event(ts: number, overrides: Partial<RequestEvent> = {}): RequestEvent {
@@ -115,6 +116,36 @@ test("collector.record 同时进累加器与环形缓冲，重启回灌也进缓
   const seeded = reloaded.aggregate;
   assert.equal(seeded.windows.find((window) => window.id === "recent10")?.overall.requests, 1);
   assert.equal(seeded.windows.find((window) => window.id === "hour1")?.overall.requests, 1);
+});
+
+function assertRecent10PerTarget(aggregate: Aggregate): void {
+  const recent10 = aggregate.windows.find((window) => window.id === "recent10")!;
+  assert.deepEqual(
+    recent10.targets.map((target) => [target.provider, target.requests]),
+    [
+      ["cold", 10],
+      ["hot", 10],
+    ],
+    "冷 / 热目标各自保留最近 10 条",
+  );
+  assert.equal(recent10.overall.requests, 20);
+}
+
+test("collector.aggregate 的 recent10 走每目标环，高频目标不会挤掉低频目标", () => {
+  const dir = mkdtempSync(join(tmpdir(), "llmwarp-collect-"));
+  const at = new Date(2026, 8, 27, 12, 0, 0).getTime();
+  const collector = new StatsCollector({ enabled: true, retentionDays: 30, dir, now: () => at });
+  for (let index = 0; index < 12; index += 1) {
+    collector.record(event(at - 120_000 + index, { provider: "cold", model: "cold-chat" }));
+  }
+  for (let index = 0; index < STATS_RECENT_CAPACITY + 50; index += 1) {
+    collector.record(event(at - 60_000 + index, { provider: "hot", model: "hot-chat" }));
+  }
+
+  assertRecent10PerTarget(collector.aggregate);
+  // 重启回灌也走同一口径：全局环里已经没有 cold，但每目标环仍有它的最近 10 条。
+  const reloaded = new StatsCollector({ enabled: true, retentionDays: 30, dir, now: () => at });
+  assertRecent10PerTarget(reloaded.aggregate);
 });
 
 test("环形缓冲容量上限：record 超过 500 条后只保留最近 500", () => {
