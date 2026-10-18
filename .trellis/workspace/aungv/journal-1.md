@@ -843,3 +843,44 @@ Follow-up to the stats feature, done outside a Trellis task at the user's reques
 ### Next Steps
 
 - 无（已归档 10-18-stats-recent10-per-target）
+
+
+## Session 27: 输入过滤 + 思考强度开关（1.3.0）
+<!-- trellis-session: v=2 fp=da66ff530c07cc79 -->
+
+**Date**: 2026-10-18
+**Task**: 输入过滤 + 思考强度开关（1.3.0）
+**Branch**: `master`
+
+### Summary
+
+两个按 target 的三层开关一起落地：转发前删掉请求里的图片 / 音频 / 文件 / 视频媒体块（解 413 与上游不收媒体的场景），以及改写思考强度（不修改 / 关闭 / 等级）。都默认不改、都不拦截请求，上游报错原样透出；统计与 TUI 活动行显示实际做了什么。收尾发 1.3.0。
+
+### Main Changes
+
+- 输入过滤：src/inputfilter.ts 纯函数只删白名单内的媒体 part，在该 content 数组首个被删位置留一句 [llmwarp: removed 2 images, 1 file]；Chat 只剩文本时压成字符串，Responses 按位置用 input_text / output_text；multipart、computer_call_output 截图、code_interpreter_call.outputs 原样透传
+- 思考强度：src/reasoning.ts 写 /chat/completions 的顶层 reasoning_effort 或 /responses 的 reasoning.effort，并删掉另一个等价字段；off 写 none，passthrough 不解析 body
+- 配置：src/config.ts 三层 provider > model > endpoint（谁先定义谁生效、整层不合并），新增 EndpointConfig / REASONING_SETTINGS / normalizeReasoning / resolveReasoning；非法值报错带字段路径
+- 观测：RequestEvent / RequestActivity 增加可选 inputFilter 与 reasoning，TUI 活动行显示 img×2 aud×1 与 rsn medium→high；全 0 / 未改写时省略字段，旧 JSONL 行照常解析
+- 文档：两个 README 增加「Input filter」「Reasoning effort」小节；CONTEXT.md 记录 target / 媒体 part / 输入过滤 / 思考强度术语
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2fbab32` | feat(config): 按 target 过滤请求里的媒体输入块 |
+| `3b78354` | feat(config): 按 target 设置思考强度（不修改 / 关闭 / 等级） |
+| `fb8906a` | chore(release): 1.3.0 |
+
+### Testing
+
+- [OK] [OK] npm run typecheck / npm test（238 通过，新增 input-filter、reasoning、config、tui、metrics、server 共 20+ 用例）/ npm run build
+- [OK] [OK] server 集成用例：上游收到的是过滤 / 改写后的 body，且落盘 JSONL 带对应字段
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 用户可 npm login --registry=https://registry.npmjs.org 后发 1.3.0；如需上游能力探测（模型支持哪些模态 / 等级）另开任务，本次按「不猜上游」处理

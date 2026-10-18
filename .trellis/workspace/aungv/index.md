@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 26
+- **Total Sessions**: 27
 - **Last Active**: 2026-10-18
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~845 | Active |
+| `journal-1.md` | ~886 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 27 | 2026-10-18 | 输入过滤 + 思考强度开关（1.3.0） | `2fbab32`, `3b78354`, `fb8906a` | `master` |
 | 26 | 2026-10-18 | 最近10条改为每个上游目标各自取最近10条 | `5b03a95` | `master` |
 | 25 | 2026-10-08 | npm 发布前补齐元数据（LICENSE / engines / bin / publishConfig / prepublishOnly） | `e91cca0` | `master` |
 | 24 | 2026-10-08 | 统计页表头回退 TTFT / tok/s（撤回我自己的过度改名） | `e6a52fb` | `master` |
