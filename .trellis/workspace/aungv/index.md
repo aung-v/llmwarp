@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 27
+- **Total Sessions**: 28
 - **Last Active**: 2026-10-18
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~886 | Active |
+| `journal-1.md` | ~924 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 28 | 2026-10-18 | 按模型过滤媒体输入 + 思考强度 TUI 闭环 | `f8363e9` | `master` |
 | 27 | 2026-10-18 | 输入过滤 + 思考强度开关（1.3.0） | `2fbab32`, `3b78354`, `fb8906a` | `master` |
 | 26 | 2026-10-18 | 最近10条改为每个上游目标各自取最近10条 | `5b03a95` | `master` |
 | 25 | 2026-10-08 | npm 发布前补齐元数据（LICENSE / engines / bin / publishConfig / prepublishOnly） | `e91cca0` | `master` |

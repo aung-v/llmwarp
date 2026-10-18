@@ -884,3 +884,41 @@ Follow-up to the stats feature, done outside a Trellis task at the user's reques
 ### Next Steps
 
 - 用户可 npm login --registry=https://registry.npmjs.org 后发 1.3.0；如需上游能力探测（模型支持哪些模态 / 等级）另开任务，本次按「不猜上游」处理
+
+
+## Session 28: 按模型过滤媒体输入 + 思考强度 TUI 闭环
+<!-- trellis-session: v=2 fp=ba1a4de7095ecba0 -->
+
+**Date**: 2026-10-18
+**Task**: 按模型过滤媒体输入 + 思考强度 TUI 闭环
+**Branch**: `master`
+
+### Summary
+
+完成输入过滤四开关与思考强度值列表的 TUI 入口，默认 passthrough（不修改），关闭写 none；补齐写盘/reload/端到端测试并通过验收。
+
+### Main Changes
+
+- 模型页选中模型设置：四行媒体过滤开关、思考强度行与 9 项值列表
+- 过滤四项整体写盘、思考强度单键写盘，均自动 reload；失败路径如实反馈
+- 移除 off 配置值，关闭直接写 none；收紧 inputFilter 非法字段校验
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f8363e9` | feat(tui): 按模型过滤媒体输入并设置思考强度 |
+
+### Testing
+
+- [OK] npm run typecheck
+- [OK] npm test（262/262）
+- [OK] npm run build
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 如需发布，提交发布版本并确认 1.3.0/1.3.1 版本口径
