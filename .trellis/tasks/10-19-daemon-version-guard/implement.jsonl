@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "VERSION 只能来自 package.json、由 src/server.ts 导出，CLI 文案用中文——本任务的核心约束都在这里"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "确认进程生命周期归 src/daemon.ts、命令实现归 src/commands.ts、TUI 归 src/tui/，不要越界放置逻辑"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "守护进程 stop/restart 的既有规则：stopDaemon 只发 SIGTERM、必须 waitForDaemonExit、admin fetch 需要超时、失败要可执行"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试与类型的硬性要求：node:test + tsx、纯函数单测、socket 用例用 skipWithoutSockets 跳过、debug log 默认关闭"}
+{"file": ".trellis/spec/frontend/interaction-guidelines.md", "reason": "CLI/TUI 文案与输出约定（ok/warn/info/dim、中文、指名下一步命令），版本警告文案要照此写"}

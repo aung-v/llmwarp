@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "核对是否真的跑了 typecheck/test/build，测试是否覆盖失败路径而不是同义反复"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "核对重启顺序、SIGTERM/SIGKILL 兜底、端口占用报错是否仍与既有规范一致"}
+{"file": ".trellis/spec/frontend/interaction-guidelines.md", "reason": "核对 CLI 与 TUI 警告文案风格、是否指名下一步命令、是否泄露 key"}
+{"file": ".trellis/spec/backend/index.md", "reason": "核对没有在 src/ 里硬编码版本号，判定逻辑只依赖 src/server.ts 导出的 VERSION"}
