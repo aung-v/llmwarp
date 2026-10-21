@@ -80,7 +80,7 @@ The port is not hardcoded: the daemon uses `"port"` from the config file (`8787`
 - `up` / `down` select within the current page's list. On the 模型 page the right-hand `选中模型设置` block is focusable: `<-` `->` switches between the list and the block, `up` / `down` picks a row, and `Enter` changes it. The stats and runtime pages have no selection.
 - `Enter` acts on the highlighted item: switching model and changing 运行 controls ask for confirmation (`Enter` confirms, `Esc` cancels); on the providers page it opens an action menu (edit / remove, remove asks again). `[ + 添加供应商 ]` starts `llmwarp add`.
 - The 模型 page's `选中模型设置` block carries the four input-filter toggles, the 思考强度 row (default 不修改), and the global `warp 模式` row. `warp 模式` is still the `useClientModel` switch - 按客户端请求 honours the client's model name (`warp` / empty means the active model, `provider/model` means that model), while 统一用当前模型 ignores it. The inline hints under the row explain this; the mode confirmation restates the consequence.
-- The 运行 page shows the daemon panel (状态 / 供应商 / 模型 / 版本 / 接入地址 / 启动时间 / 配置文件, plus 重启 daemon while it runs and 启动 daemon when it is down), the 反馈 panel (recent action results, not cleared by auto-refresh), and the 请求活动 panel (last-60-second metrics plus recent requests with `img×2 aud×1` / `rsn medium→high` summaries). `<-` `->` moves focus onto the restart button. When the terminal is short, recent requests and older feedback are cut first and the hidden count is shown; the button and the three metric lines stay.
+- The 运行 page shows the daemon panel (状态 / 供应商 / 模型 / 版本 / 接入地址 / 启动时间 / 配置文件, plus 重启 daemon while it runs and 启动 daemon when it is down), the 反馈 panel (recent action results, not cleared by auto-refresh), and the 请求活动 panel (last-60-second metrics plus recent requests with `img×2 aud×1` / `rsn medium→high` summaries). If the running daemon is an older build, the 版本 row is marked 旧版本 and a hint line appears. `<-` `->` moves focus onto the restart button. When the terminal is short, recent requests and older feedback are cut first and the hidden count is shown; the button and the three metric lines stay.
 - The stats page has a range selector cycled with `h`: 最近10条 / 近1小时 / 今天 / 近7天 / 近30天. 「最近10条」means each provider/model/endpoint's own latest 10 requests, not the global latest 10, so a busy upstream cannot hide the others. The target table (request count, error rate, TTFT, tok/s per provider/model/endpoint) and the totals block below it are both recomputed for the selected range; the sparkline always shows the last 30 days of daily tokens, with min/max/current marked.
 - Only requests actually forwarded upstream are counted; routing failures are reported separately as 未发出 N. Cancelled clients count as 中断 and stay out of the error-rate denominator. End-to-end latency is deliberately not shown per target - answer length dominates it, which makes cross-provider comparison misleading.
 - `r` refreshes (auto-refresh runs every 3 seconds), `q` or `Ctrl-C` exits without stopping the daemon. The UI only uses arrow keys plus `Enter` / `Esc` / `h` / `r` / `q`; there are no single-letter action shortcuts.
@@ -102,7 +102,7 @@ History is stored as JSONL under `~/.config/llmwarp/stats/YYYY-MM-DD.jsonl` and 
 | `llmwarp status` (`st`) | config path, port, base URL, current provider and model |
 | `llmwarp tui` | open the management UI |
 | `llmwarp remove [provider]` (`rm`) | remove a provider |
-| `llmwarp start` / `llmwarp stop` | start / stop the daemon in the background |
+| `llmwarp start` / `llmwarp stop` | start / stop the daemon in the background; `start` restarts a daemon left over from an older build |
 | `llmwarp serve [--port <n>]` | run the daemon in the foreground |
 | `llmwarp reload` | make the daemon reload the config |
 
@@ -132,7 +132,7 @@ The config lives at `~/.config/llmwarp/config.jsonc` (XDG-aware: `$XDG_CONFIG_HO
 - Provider names cannot contain `/` (the first `/` is the routing separator), whitespace or control characters; model names cannot contain whitespace or control characters.
 - The config file is written `0600` and its directory `0700`. Prefer `${ENV_VAR}` over plaintext keys.
 - While the daemon runs: state in `~/.config/llmwarp/daemon.json` (holds the loopback admin token), logs in `~/.config/llmwarp/daemon.log`.
-- After upgrading or rebuilding the CLI, a running daemon may still be an older build (it cannot read newly added config keys): `llmwarp status` / `reload` / `use` / `edit` print a warning, and the TUI marks the version row as 旧版本. `llmwarp start` stops that old daemon and starts the current version; `llmwarp reload` only re-reads config and does not restart the process.
+- After upgrading or rebuilding the CLI, a running daemon may still be an older build (it cannot read newly added config keys): `llmwarp status` / `reload` / `use` / `edit` / `remove` print a warning, and the TUI marks the version row as 旧版本. `llmwarp start` stops that old daemon and starts the current version; `llmwarp reload` only re-reads config and does not restart the process.
 
 ### Input filter
 
