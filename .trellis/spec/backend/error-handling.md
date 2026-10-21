@@ -44,6 +44,28 @@ else res.end();
 - The daemon's shutdown must `server.closeAllConnections()` before `server.close()`. Otherwise open keep-alive connections keep the old process alive, the new daemon binds the same port, and a client that reuses its pooled connection keeps hitting the old process and getting `401 unauthorized` with the old token.
 - Admin `fetch` calls need a timeout (`adminRequest`, the readiness poll in `startDaemon`). Without one, a half-open connection to a stale daemon makes the TUI hang on 处理中 forever instead of surfacing an error.
 
+## Version Consistency (CLI vs running daemon)
+
+- A daemon keeps the code it was started with. `reload` re-reads `config.jsonc` only — it
+  never loads new code, and `normalizeConfig` drops keys it does not know. So after an
+  upgrade/rebuild, a running daemon silently ignores newly added config keys
+  (`inputFilter`, `reasoning`, …) and the user sees a fix "applied but not working".
+- Version source is one place: `VERSION` from `src/server.ts` (read from `package.json`).
+  The daemon writes it into `daemon.json` at startup and reports it in
+  `GET /_llmwarp/status`; the TUI compares the live status version, the CLI compares
+  `daemon.json`.
+- Treat missing / empty / non-string `version` as a mismatch: such a file predates the
+  field, so it is older than any current build.
+- One rule, `isDaemonVersionCurrent()` in `src/daemon.ts`, decides freshness; CLI copy comes
+  from `staleDaemonWarning()`, the TUI renders its own shorter line. Never fork the rule.
+- Every command that pushes config to the daemon (`status`, `reload`, `use`, `edit`,
+  `edit --file`, `remove`) must print the same actionable warning instead of failing.
+- `llmwarp start` owns the fix: `planDaemonStart()` → `"restart"` → `stopDaemon()` →
+  `waitForDaemonExit()` → the normal spawn path. `reload` deliberately does not restart
+  (it would cut in-flight streams); the TUI restart button is the explicit alternative.
+- Do not hardcode a version string in `src/`, and do not skip the mismatch check because
+  "start already returned early" — that early return is exactly the trap.
+
 ## Forbidden Patterns
 
 - Do not print secrets in exceptions or diagnostics.

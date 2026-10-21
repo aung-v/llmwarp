@@ -132,6 +132,7 @@ The config lives at `~/.config/llmwarp/config.jsonc` (XDG-aware: `$XDG_CONFIG_HO
 - Provider names cannot contain `/` (the first `/` is the routing separator), whitespace or control characters; model names cannot contain whitespace or control characters.
 - The config file is written `0600` and its directory `0700`. Prefer `${ENV_VAR}` over plaintext keys.
 - While the daemon runs: state in `~/.config/llmwarp/daemon.json` (holds the loopback admin token), logs in `~/.config/llmwarp/daemon.log`.
+- After upgrading or rebuilding the CLI, a running daemon may still be an older build (it cannot read newly added config keys): `llmwarp status` / `reload` / `use` / `edit` print a warning, and the TUI marks the version row as 旧版本. `llmwarp start` stops that old daemon and starts the current version; `llmwarp reload` only re-reads config and does not restart the process.
 
 ### Input filter
 

@@ -132,6 +132,7 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 - 供应商名不能含 `/`（第一个 `/` 是路由分隔符）、空白或控制字符；模型名不能含空白或控制字符。
 - 配置文件写入权限 `0600`，所在目录 `0700`。密钥建议用 `${ENV_VAR}` 而非明文。
 - 守护进程运行时：状态在 `~/.config/llmwarp/daemon.json`（含本机管理接口 token），日志在 `~/.config/llmwarp/daemon.log`。
+- 升级 / 重新构建 CLI 后，运行中的守护进程可能还是旧版本（读不懂新增的配置键）：`llmwarp status` / `reload` / `use` / `edit` 会打印警告，TUI 的守护进程信息里版本行也会标注「旧版本」。`llmwarp start` 会自动停掉旧进程并换成当前版本，`llmwarp reload` 只重读配置、不会重启进程。
 
 ### 输入过滤
 
