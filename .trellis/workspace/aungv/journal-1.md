@@ -922,3 +922,47 @@ Follow-up to the stats feature, done outside a Trellis task at the user's reques
 ### Next Steps
 
 - 如需发布，提交发布版本并确认 1.3.0/1.3.1 版本口径
+
+
+## Session 29: 守护进程版本一致性保护（1.3.1）
+<!-- trellis-session: v=2 fp=c37b583a70ea41c5 -->
+
+**Date**: 2026-10-21
+**Task**: 守护进程版本一致性保护（1.3.1）
+**Branch**: `master`
+
+### Summary
+
+CLI 与运行中守护进程版本不一致时不再静默：status/reload/use/edit/remove 统一警告，start 自动重启旧进程，TUI 标注 (旧版本)；顺带发布 1.3.1。
+
+### Main Changes
+
+- daemon.ts 新增 isDaemonVersionCurrent / staleDaemonWarning / planDaemonStart / StartResult；startDaemon 版本不一致时 stop → waitForDaemonExit → 重启，同版本保持复用
+- commands.ts 统一 warnStaleDaemon()，覆盖 status / reload / use / edit / edit --file / remove；start 输出区分「重启」与「首次启动」
+- TUI 运行页与供应商页标注 (旧版本) 并给提示行；矮终端优先保住版本行（14 行可见，12–13 行只剩按钮，已在 design.md 记录）
+- 测试：新增 daemon 纯函数用例；commands 覆盖 status/reload/use 的警告与不警告；TUI 覆盖告警行与 72/80/90 列不破版
+- 文档：两个 README、CONTEXT.md（Stale daemon 词条）、backend/error-handling.md 版本一致性规范；版本 1.3.0 → 1.3.1
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6401383` | feat(daemon): 版本不一致时警告并让 start 重启旧进程 |
+| `14ec46b` | docs: 记录守护进程版本一致性行为 |
+| `849a4f2` | chore(task): 10-19-daemon-version-guard 规划文档 |
+| `9d1307d` | chore(release): 1.3.1 |
+
+### Testing
+
+- [OK] npm run typecheck / npm test（16 个测试文件全通过）/ npm run build
+- [OK] 交叉检查时回退关键实现确认测试会失败（非假绿）；TUI 按高度 12–40、宽度 72–100 扫版无破版
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- npm publish 发 1.3.1（1.3.0 已发布）
+- 发布后 git tag v1.3.1 && git push origin v1.3.1
+- 仍在跑的旧版本守护进程执行 llmwarp start 重启后，输入过滤才会真正生效

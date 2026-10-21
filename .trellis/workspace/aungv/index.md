@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 28
-- **Last Active**: 2026-10-18
+- **Total Sessions**: 29
+- **Last Active**: 2026-10-21
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~924 | Active |
+| `journal-1.md` | ~968 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 29 | 2026-10-21 | 守护进程版本一致性保护（1.3.1） | `6401383`, `14ec46b`, `849a4f2`, `9d1307d` | `master` |
 | 28 | 2026-10-18 | 按模型过滤媒体输入 + 思考强度 TUI 闭环 | `f8363e9` | `master` |
 | 27 | 2026-10-18 | 输入过滤 + 思考强度开关（1.3.0） | `2fbab32`, `3b78354`, `fb8906a` | `master` |
 | 26 | 2026-10-18 | 最近10条改为每个上游目标各自取最近10条 | `5b03a95` | `master` |
