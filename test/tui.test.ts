@@ -50,6 +50,7 @@ import {
 } from "../src/tui/model.js";
 import { formatCount, frameToAnsi, renderTui, visibleWidth } from "../src/tui/render.js";
 import type { Config } from "../src/config.js";
+import { VERSION } from "../src/server.js";
 import { AggregateAccumulator } from "../src/stats/aggregate.js";
 import type { RequestEvent } from "../src/stats/event.js";
 
@@ -2195,4 +2196,63 @@ test("请求活动行显示思考强度摘要，未改写不显示", () => {
     { height: 24, width: 120 },
   );
   assert.doesNotMatch(plain, /rsn /);
+});
+
+test("守护进程版本不一致时运行页出现告警行，版本一致 / 离线时没有", () => {
+  const staleStatus: StatusSnapshot = { ...status, version: "0.0.0-stale" };
+  const stale = renderTui(
+    openPage(createTuiState(buildCatalog(config), staleStatus), "runtime"),
+    { height: 30, width: 90 },
+  );
+  assert.match(stale, /\(旧版本\)/);
+  assert.match(stale, /旧进程会忽略新配置/);
+  assert.match(stale, /用「重启」按钮/);
+  assert.match(stale, new RegExp(`CLI v${VERSION.replace(/\./g, "\\.")}`));
+  assertFrameFits(stale, 90, 30, "旧版本守护进程告警");
+
+  const current = renderTui(
+    openPage(createTuiState(buildCatalog(config), { ...status, version: VERSION }), "runtime"),
+    { height: 30, width: 90 },
+  );
+  assert.doesNotMatch(current, /\(旧版本\)/);
+  assert.doesNotMatch(current, /旧进程会忽略新配置/);
+  assertFrameFits(current, 90, 30, "同版本守护进程");
+
+  const offline = renderTui(
+    openPage(createTuiState(buildCatalog(config), null), "runtime"),
+    { height: 30, width: 90 },
+  );
+  assert.doesNotMatch(offline, /旧进程会忽略新配置/);
+  assertFrameFits(offline, 90, 30, "离线守护进程");
+});
+
+test("终端很矮时优先保住版本行（(旧版本) 标记不丢）", () => {
+  const staleStatus: StatusSnapshot = { ...status, version: "0.0.0-stale" };
+  const state = openPage(createTuiState(buildCatalog(config), staleStatus), "runtime");
+  // 高度 14 时守护进程面板只剩两行：状态行让位给版本行（标题栏已经有「运行中」）。
+  const narrow = renderTui(state, { height: 14, width: 90 });
+  assert.match(narrow, /\(旧版本\)/);
+  assert.doesNotMatch(narrow, /状态 运行中   供应商/);
+  assertFrameFits(narrow, 90, 14, "14 行终端旧版本守护进程");
+
+  const current = renderTui(
+    openPage(createTuiState(buildCatalog(config), { ...status, version: VERSION }), "runtime"),
+    { height: 14, width: 90 },
+  );
+  assert.match(current, /状态 运行中   供应商/);
+  assert.doesNotMatch(current, /\(旧版本\)/);
+  assertFrameFits(current, 90, 14, "14 行终端同版本守护进程");
+});
+
+test("守护进程版本不一致时供应商页（窄栏）也标注，且不破版", () => {
+  const state = openProvidersPage(
+    createTuiState(buildCatalog(config), { ...status, version: "0.0.0-stale" }, true, providerList),
+  );
+  for (const width of [72, 80, 90]) {
+    const frame = renderTui(state, { height: 30, width });
+    assert.match(frame, /\(旧版本\)/, `供应商页 ${width} 列应标注旧版本`);
+    assert.match(frame, /旧进程会忽略新配置/);
+    assert.match(frame, /到运行页重启/);
+    assertFrameFits(frame, width, 30, `供应商页旧版本 ${width} 列`);
+  }
 });

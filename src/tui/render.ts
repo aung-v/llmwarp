@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import pc from "picocolors";
-import type { TuiEvent, TuiPage, TuiState } from "./model.js";
+import type { StatusSnapshot, TuiEvent, TuiPage, TuiState } from "./model.js";
 import {
   FILTER_LABELS,
   PROVIDER_ACTIONS,
@@ -16,6 +16,8 @@ import {
 import type { AggregateMetrics } from "../stats/aggregate.js";
 import type { InputFilterCounts } from "../inputfilter.js";
 import type { ReasoningInfo } from "../reasoning.js";
+import { isDaemonVersionCurrent } from "../daemon.js";
+import { VERSION } from "../server.js";
 
 const ANSI_ESCAPE = /\u001B\[[0-?]*[ -/]*[@-~]|\u001B\][^\u0007]*(?:\u0007|\u001B\\)/g;
 
@@ -300,11 +302,31 @@ function daemonFields(state: TuiState): [string, string][] {
     ["状态", "运行中"],
     ["供应商", sanitize(status.active?.provider ?? "—")],
     ["模型", status.active?.model ? sanitize(status.active.model) : "—"],
-    ["版本", sanitize(status.version)],
+    [
+      "版本",
+      daemonVersionStale(status)
+        ? `${sanitize(status.version)} ${pc.yellow("(旧版本)")}`
+        : sanitize(status.version),
+    ],
     ["接入地址", sanitize(`http://127.0.0.1:${status.port}/v1`)],
     ["启动时间", shortStartTime(status.startedAt)],
     ["配置文件", shortPath(status.configPath)],
   ];
+}
+
+/** 守护进程自报版本与当前 CLI 不一致；离线（status 为 null）不告警。 */
+function daemonVersionStale(status: StatusSnapshot | null): boolean {
+  return status !== null && !isDaemonVersionCurrent({ version: status.version });
+}
+
+/** TUI 短提示；判定复用 isDaemonVersionCurrent，避免与 CLI 规则分叉。 */
+function daemonStaleHint(): string {
+  return pc.yellow(`旧进程会忽略新配置 · 用「重启」按钮 · CLI v${VERSION}`);
+}
+
+/** 窄栏（供应商页）放不下长句：压成一句仍指明下一步在「运行」页。 */
+function daemonStaleShortHint(): string {
+  return pc.yellow("旧进程会忽略新配置 · 到运行页重启");
 }
 
 /** 启动时间只保留 `MM-DD HH:mm`，完整值仍可从管理端 status 拿到。 */
@@ -329,18 +351,47 @@ function shortPath(value: string): string {
 
 /** 供应商页右栏：只读的守护进程信息，重启按钮已经搬到运行页。 */
 function daemonInfoRows(state: TuiState): string[] {
-  return daemonFields(state).map(([label, value]) => `${label}      ${value}`);
+  const rows = daemonFields(state).map(([label, value]) => `${label}      ${value}`);
+  // 窄栏正文只有 33 列（72 列终端）：提示行不缩进，保证「到运行页重启」不被截掉。
+  if (daemonVersionStale(state.status)) rows.push(daemonStaleShortHint());
+  return rows;
+}
+
+/** 守护进程信息面板：高度随行数（版本告警多一行），但不超过可用高度。 */
+function daemonInfoPanel(state: TuiState, width: number, maxHeight: number): string[] {
+  const rows = daemonInfoRows(state);
+  return panel("守护进程", rows, width, Math.min(maxHeight, rows.length + 2));
 }
 
 /** 运行页顶部：宽栏下把 7 个字段压成 3 行，给反馈和活动留高度。 */
 function daemonWideRows(state: TuiState): string[] {
   const fields = new Map(daemonFields(state));
   const value = (key: string): string => fields.get(key) ?? "—";
-  return [
+  const rows = [
     `状态 ${value("状态")}   供应商 ${value("供应商")}   模型 ${value("模型")}`,
     `版本 ${value("版本")}   接入地址 ${value("接入地址")}`,
     `启动时间 ${value("启动时间")}   配置文件 ${value("配置文件")}`,
   ];
+  if (daemonVersionStale(state.status)) rows.push(daemonStaleHint());
+  return rows;
+}
+
+/**
+ * 运行页守护进程面板的行：按可用内容行数逐级降级 —— 依次砍提示、空行，最后砍
+ * 启动时间/配置文件行，始终优先保住重启按钮。版本告警行（宽栏第 4 行）只在版本
+ * 不一致时出现，且只要还有 4 行就会保留：它就是本次要让人看见的信息。
+ */
+function daemonRows(wide: string[], button: string, buttonHint: string, content: number): string[] {
+  const [line1, line2, line3] = wide;
+  const staleRow = wide[3];
+  if (content >= 6) return [line1, line2, line3, staleRow ?? "", button, buttonHint];
+  if (content === 5) return staleRow ? [line1, line2, line3, staleRow, button] : [line1, line2, line3, button, buttonHint];
+  if (content === 4) return staleRow ? [line1, line2, staleRow, button] : [line1, line2, line3, button];
+  if (content === 3) return [line1, line2, button];
+  // 只剩两行时优先保住版本行而不是状态行：运行中状态标题栏已经有了，而 (旧版本)
+  // 这个信号别处都没有。再矮（只剩按钮）就无从展示，属于整页已经不可读的退化。
+  if (content === 2) return staleRow ? [line2, button] : [line1, button];
+  return [button];
 }
 
 function shortTime(timestamp: string): string {
@@ -473,24 +524,7 @@ function runtimePanels(state: TuiState, height: number, width: number): string[]
   const daemonHeight = height <= 3 ? height : Math.max(3, Math.min(8, height - 6));
   const daemonContent = Math.max(daemonHeight - 2, 1);
   const wide = daemonWideRows(state);
-  const daemonRows =
-    daemonContent >= 6
-      ? [...wide, "", button, buttonHint]
-      : daemonContent === 5
-        ? [...wide, button, buttonHint]
-        : daemonContent === 4
-          ? [...wide, button]
-          : daemonContent === 3
-            ? [wide[0], wide[1], button]
-            : daemonContent === 2
-              ? [wide[0], button]
-              : [button];
-  const daemonPanel = panel(
-    "守护进程",
-    daemonRows,
-    width,
-    daemonHeight,
-  );
+  const daemonPanel = panel("守护进程", daemonRows(wide, button, buttonHint, daemonContent), width, daemonHeight);
 
   let remaining = height - daemonPanel.length;
   if (remaining < 3) return daemonPanel;
@@ -899,7 +933,7 @@ export function renderTui(
     // 模型页右栏 = 选中模型设置；供应商页右栏 = 只读的守护进程信息。
     const rightPanel =
       state.page === "providers"
-        ? panel("守护进程", daemonInfoRows(state), rightWidth, Math.min(mainHeight, 9))
+        ? daemonInfoPanel(state, rightWidth, mainHeight)
         : state.confirming === "reasoning-values"
           ? panel(
               reasoningPanelTitle(state),

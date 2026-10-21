@@ -8,10 +8,12 @@ const home = mkdtempSync(join(tmpdir(), "llmwarp-commands-"));
 process.env.HOME = home;
 process.env.XDG_CONFIG_HOME = home;
 
-const { CONFIG_DIR, CONFIG_PATH, DAEMON_PATH, loadConfig, updateActive, upsertProvider } = await import(
-  "../src/config.js"
+const { CONFIG_DIR, CONFIG_PATH, DAEMON_PATH, clearDaemonInfo, loadConfig, updateActive, upsertProvider } =
+  await import("../src/config.js");
+const { resolveModelName, useCommand, activateAddedModel, reloadCommand, statusCommand } = await import(
+  "../src/commands.js"
 );
-const { resolveModelName, useCommand, activateAddedModel } = await import("../src/commands.js");
+const { VERSION } = await import("../src/server.js");
 
 const VALID_NAMES = ["meta/llama-3", "my.model.v1:x", "模型·测试", "deepseek-chat"];
 
@@ -238,4 +240,108 @@ test("activateAddedModel 合法模型：返回 true 并写入 active", () => {
   const saved = loadConfig();
   assert.equal(saved.activeProvider, "q");
   assert.equal(saved.activeModel, "meta/llama-3");
+});
+
+const STALE_VERSION = "0.0.0-stale";
+
+/** 写入 daemon.json：pid 用当前测试进程，保证 isAlive 为真。 */
+function writeDaemonJson(version: string): void {
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  writeFileSync(
+    DAEMON_PATH,
+    JSON.stringify({ pid: process.pid, port: 1, token: "test-token", startedAt: "", version }, null, 2),
+    "utf8",
+  );
+}
+
+/** 捕获 console.log（warn / ok / info 都走它），不看颜色只看文案。 */
+async function captureLogs(run: () => Promise<void> | void): Promise<string[]> {
+  const logs: string[] = [];
+  const realLog = console.log;
+  console.log = (...args: unknown[]) => {
+    logs.push(args.map((a) => String(a)).join(" "));
+  };
+  try {
+    await run();
+  } finally {
+    console.log = realLog;
+  }
+  return logs;
+}
+
+function staleWarningLine(logs: string[]): string | undefined {
+  return logs.find((line) => line.includes("llmwarp stop && llmwarp start"));
+}
+
+test("statusCommand：守护进程版本不一致时多一条警告，版本一致时不警告", async () => {
+  seedConfig();
+  try {
+    writeDaemonJson(STALE_VERSION);
+    const stale = await captureLogs(() => statusCommand());
+    const warning = staleWarningLine(stale);
+    assert.ok(warning, `应输出版本警告：${stale.join("\n")}`);
+    assert.match(warning, new RegExp(STALE_VERSION));
+    assert.ok(warning.includes(`v${VERSION}`), `警告应含当前 CLI 版本：${warning}`);
+    assert.ok(
+      stale.some((line) => line.includes(`运行中 (pid ${process.pid})`)),
+      "版本不一致不改变 status 的守护进程输出",
+    );
+
+    writeDaemonJson(VERSION);
+    const current = await captureLogs(() => statusCommand());
+    assert.equal(staleWarningLine(current), undefined, `同版本不应警告：${current.join("\n")}`);
+  } finally {
+    clearDaemonInfo();
+  }
+});
+
+test("reloadCommand：版本不一致时重载照常成功并追加警告，版本一致时无警告", async () => {
+  seedConfig();
+  writeDaemonJson(STALE_VERSION);
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })) as typeof fetch;
+  try {
+    const stale = await captureLogs(() => reloadCommand());
+    assert.ok(stale.some((line) => line.includes("已重载配置")), stale.join("\n"));
+    assert.ok(staleWarningLine(stale), `应输出版本警告：${stale.join("\n")}`);
+
+    writeDaemonJson(VERSION);
+    const current = await captureLogs(() => reloadCommand());
+    assert.ok(current.some((line) => line.includes("已重载配置")), current.join("\n"));
+    assert.equal(staleWarningLine(current), undefined, `同版本不应警告：${current.join("\n")}`);
+  } finally {
+    globalThis.fetch = realFetch;
+    clearDaemonInfo();
+  }
+});
+
+test("useCommand：版本不一致时切换照常成功并追加警告，版本一致时不警告", async () => {
+  seedConfig();
+  writeDaemonJson(STALE_VERSION);
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })) as typeof fetch;
+  try {
+    const stale = await captureLogs(() => useCommand("p", { model: "good-model" }));
+    assert.ok(stale.some((line) => line.includes("已切换到")), stale.join("\n"));
+    const warning = staleWarningLine(stale);
+    assert.ok(warning, `应输出版本警告：${stale.join("\n")}`);
+    assert.match(warning, new RegExp(STALE_VERSION));
+    assert.ok(warning.includes(`v${VERSION}`), `警告应含当前 CLI 版本：${warning}`);
+
+    writeDaemonJson(VERSION);
+    const current = await captureLogs(() => useCommand("p", { model: "good-model" }));
+    assert.ok(current.some((line) => line.includes("已切换到")), current.join("\n"));
+    assert.equal(staleWarningLine(current), undefined, `同版本不应警告：${current.join("\n")}`);
+  } finally {
+    globalThis.fetch = realFetch;
+    clearDaemonInfo();
+  }
 });

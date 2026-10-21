@@ -17,7 +17,15 @@ import {
   upsertProvider,
   writeConfigText,
 } from "./config.js";
-import { adminRequest, daemonRunning, startDaemon, stopDaemon } from "./daemon.js";
+import {
+  adminRequest,
+  daemonRunning,
+  isDaemonVersionCurrent,
+  staleDaemonWarning,
+  startDaemon,
+  stopDaemon,
+} from "./daemon.js";
+import { VERSION } from "./server.js";
 import { accessLines, endpointUrl } from "./endpoint.js";
 import { checkProvider, statusLabel, statusHint } from "./health.js";
 import {
@@ -43,6 +51,12 @@ function dedupe(items: string[]): string[] {
   return [...new Set(items)];
 }
 
+/** 运行中的守护进程与当前 CLI 版本不一致时，打印同一条可执行警告。 */
+function warnStaleDaemon(): void {
+  const info = daemonRunning();
+  if (info && !isDaemonVersionCurrent(info)) warn(staleDaemonWarning(info));
+}
+
 /** 解析模型列表：逗号或任意空白（空格/换行）都作分隔，去掉空项与重复。 */
 function parseModelList(input: string): string[] {
   return dedupe(input.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean));
@@ -66,6 +80,7 @@ async function applyActive(provider: string, model: string): Promise<void> {
     await startDaemon(getPort(loadConfig()));
   }
   await adminRequest("POST", "use", { provider, model });
+  warnStaleDaemon();
 }
 
 export function initCommand(opts: { force?: boolean } = {}): void {
@@ -376,6 +391,7 @@ export async function statusCommand(): Promise<void> {
   info(`端口        ${getPort(config)}`);
   info(`接入地址    http://127.0.0.1:${getPort(config)}/v1`);
   info(`守护进程    ${running ? pc.green(`运行中 (pid ${running.pid})`) : pc.yellow("未运行")}`);
+  warnStaleDaemon();
   if (active) {
     info(`当前供应商  ${bold(active.providerName)}`);
     info(`当前模型    ${active.model ? bold(active.model) : pc.yellow("(未选)")}`);
@@ -412,6 +428,7 @@ export async function removeCommand(providerArg?: string): Promise<void> {
     } catch {
       // 忽略
     }
+    warnStaleDaemon();
   }
 }
 
@@ -422,8 +439,19 @@ export async function serveCommand(port?: number): Promise<void> {
 
 export async function startCommand(): Promise<void> {
   const config = loadConfig();
-  const info2 = await startDaemon(getPort(config));
-  ok(`守护进程已启动 (pid ${info2.pid})，端口 ${info2.port}`);
+  const before = daemonRunning();
+  const result = await startDaemon(getPort(config));
+  if (result.action === "restart") {
+    const previous =
+      before && typeof before.version === "string" && before.version.length > 0
+        ? before.version
+        : "未知";
+    ok(
+      `检测到旧版本守护进程 v${previous}，已重启为 v${VERSION} (pid ${result.info.pid})，端口 ${result.info.port}`,
+    );
+  } else {
+    ok(`守护进程已启动 (pid ${result.info.pid})，端口 ${result.info.port}`);
+  }
   for (const line of accessLines(config)) info(dim(line));
 }
 
@@ -439,6 +467,7 @@ export async function reloadCommand(): Promise<void> {
   }
   await adminRequest("POST", "reload");
   ok("已重载配置");
+  warnStaleDaemon();
 }
 
 export interface EditOptions {
@@ -460,6 +489,7 @@ async function editConfigFile(): Promise<void> {
     try {
       await adminRequest("POST", "reload");
       ok("已重载配置到守护进程");
+      warnStaleDaemon();
     } catch (err) {
       warn(`重载失败：${(err as Error).message}`);
     }
@@ -517,6 +547,7 @@ export async function editCommand(providerArg?: string, opts: EditOptions = {}):
       try {
         await adminRequest("POST", "reload");
         ok("已重载到守护进程");
+        warnStaleDaemon();
       } catch (err) {
         warn(`重载失败：${(err as Error).message}`);
       }

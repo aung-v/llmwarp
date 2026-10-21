@@ -12,6 +12,7 @@ import {
 } from "./config.js";
 import { debugLog } from "./debuglog.js";
 import { isPortInUse, findPortOwner, looksLikeLlwarp, waitPortFree, portInUseMessage } from "./net.js";
+import { VERSION } from "./server.js";
 
 export function isAlive(pid: number): boolean {
   try {
@@ -26,6 +27,41 @@ export function daemonRunning(): DaemonInfo | null {
   const info = readDaemonInfo();
   if (!info) return null;
   return isAlive(info.pid) ? info : null;
+}
+
+/** 运行中的守护进程是否与当前 CLI 同版本；info 为 null 或版本缺失 / 非法都算不一致。 */
+export function isDaemonVersionCurrent(
+  info: Pick<DaemonInfo, "version"> | null,
+  cliVersion: string = VERSION,
+): boolean {
+  if (!info) return false;
+  return typeof info.version === "string" && info.version.length > 0 && info.version === cliVersion;
+}
+
+/** CLI 侧统一警告文案（纯字符串，不依赖 ui.ts）；判定与 TUI 共用 isDaemonVersionCurrent。 */
+export function staleDaemonWarning(
+  info: Pick<DaemonInfo, "version" | "pid">,
+  cliVersion: string = VERSION,
+): string {
+  const daemonVersion =
+    typeof info.version === "string" && info.version.length > 0 ? `v${info.version}` : "未知";
+  return `守护进程版本 ${daemonVersion} (pid ${info.pid}) 与 CLI v${cliVersion} 不一致：新配置项会被旧进程忽略，请重启：llmwarp stop && llmwarp start`;
+}
+
+export type StartAction = "start" | "reuse" | "restart";
+
+export interface StartResult {
+  info: DaemonInfo;
+  action: StartAction;
+}
+
+/** 纯决策：没有守护进程 → start；版本一致 → reuse；版本不一致（含缺失）→ restart。 */
+export function planDaemonStart(
+  running: DaemonInfo | null,
+  cliVersion: string = VERSION,
+): StartAction {
+  if (!running) return "start";
+  return isDaemonVersionCurrent(running, cliVersion) ? "reuse" : "restart";
 }
 
 /** 解析出重新唤起 CLI 的命令（开发时跑 src/cli.ts，打包后跑 dist/cli.js）。 */
@@ -82,13 +118,26 @@ async function waitForDaemon(
   throw new Error(`守护进程启动超时（端口 ${port}）—— 运行 llmwarp status 查看，或看 ${DAEMON_LOG}`);
 }
 
-export async function startDaemon(port: number): Promise<DaemonInfo> {
+export async function startDaemon(port: number): Promise<StartResult> {
   const t0 = Date.now();
   debugLog("daemon", "startDaemon 请求", { port, argv1: process.argv[1] });
   const running = daemonRunning();
-  if (running) {
-    debugLog("daemon", "已有守护进程，直接返回", { pid: running.pid, port: running.port });
-    return running;
+  const action = planDaemonStart(running);
+  debugLog("daemon", "startDaemon 决策", {
+    action,
+    pid: running?.pid,
+    daemonVersion: running?.version,
+    cliVersion: VERSION,
+  });
+  if (running && action === "reuse") {
+    debugLog("daemon", "已有同版本守护进程，直接返回", { pid: running.pid, port: running.port });
+    return { info: running, action: "reuse" };
+  }
+  if (running && action === "restart") {
+    // 版本不一致：先停旧进程并等它真正退出（含 SIGKILL 兜底），否则会撞同端口。
+    debugLog("daemon", "守护进程版本不一致，先停后启", { pid: running.pid, daemonVersion: running.version });
+    stopDaemon();
+    await waitForDaemonExit(running.pid);
   }
   if (await isPortInUse(port)) {
     const owner = findPortOwner(port);
@@ -126,8 +175,8 @@ export async function startDaemon(port: number): Promise<DaemonInfo> {
   debugLog("daemon", "spawn", { pid: child.pid, cmd: [process.execPath, ...cmd].join(" ") });
   try {
     const info = await waitForDaemon(port, 8000, child);
-    debugLog("daemon", "startDaemon 就绪", { pid: info.pid, port: info.port, ms: Date.now() - t0 });
-    return info;
+    debugLog("daemon", "startDaemon 就绪", { pid: info.pid, port: info.port, action, ms: Date.now() - t0 });
+    return { info, action: action === "restart" ? "restart" : "start" };
   } catch (err) {
     debugLog("daemon", "startDaemon 失败", { ms: Date.now() - t0, err: (err as Error).message });
     throw err;
